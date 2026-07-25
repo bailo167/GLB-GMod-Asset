@@ -32,7 +32,13 @@ from bake_validation import (
     unpainted_region_report,
     uv_bounds_report,
 )
-from rig_math import anatomical_influences, classify_region, robust_edge_deformation, validate_influences
+from rig_math import (
+    anatomical_influences,
+    classify_region,
+    rescale_guide_landmarks,
+    robust_edge_deformation,
+    validate_influences,
+)
 from source_skeleton import CORE_ORDER, get_template, validate_template
 
 
@@ -2412,6 +2418,20 @@ def main(config_path: Path) -> None:
 
     animation_base = options.get("animation_base", "male")
     source_guide = guide_in_source_axes(guide)
+    # The guide is stored at the height the project used when it was locked. If
+    # the target height differs now, every landmark is proportionally off the
+    # body and the conformance stage would reject the build, so the guide is
+    # rescaled to the mesh before anything reads it.
+    guide_rescale = rescale_guide_landmarks(
+        source_guide.get("landmarks") or {},
+        source_guide.get("rigid_zones") or [],
+        float(bounds["height"]),
+    )
+    if guide_rescale["applied"]:
+        log(
+            f"Rescaled the locked guide by {guide_rescale['factor']:.4f}: landmarks were locked at "
+            f"{guide_rescale['guide_height']:.1f} units, the mesh is normalised to {guide_rescale['mesh_height']:.1f}."
+        )
     guide_anatomy = validate_source_guide(source_guide, float(bounds["height"]))
     if not guide_anatomy["passed"]:
         raise RuntimeError("The locked guide is mirrored, crossed or anatomically invalid: " + json.dumps(guide_anatomy))
@@ -2488,6 +2508,7 @@ def main(config_path: Path) -> None:
         "rig_source": "locked_guided_valvebiped",
         "guide_version": guide.get("version"),
         "guide_landmarks": len(guide.get("landmarks", {})),
+        "guide_rescale": guide_rescale,
         "cleanup": cleanup,
         "base_reduction": base_reduction,
         "texture_bake": texture_bake,
