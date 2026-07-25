@@ -1304,6 +1304,29 @@ def flatten_unpainted(image: bpy.types.Image, painted: list[int]) -> dict[str, A
     return {"filled_texels": filled, "fill_colour": [round(channel, 6) for channel in fill]}
 
 
+def persist_bake_image(image: bpy.types.Image, path: Path) -> str | None:
+    """Write the baked atlas to disk beside the generated Blender source.
+
+    A generated image only stores its generation settings inside a .blend, not
+    its painted pixels, so the saved source file would otherwise open with an
+    empty atlas.  Saving it makes the image file backed and gives the user a
+    texture they can inspect directly.
+    """
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        image.filepath_raw = str(path)
+        image.file_format = "PNG"
+        image.save()
+        return path.name
+    except Exception as exc:
+        log(f"Could not write the baked atlas to disk: {exc}")
+        try:
+            image.pack()
+            return None
+        except Exception:
+            return None
+
+
 def render_material_proof(path: Path, obj: bpy.types.Object, height: float, back: bool = False) -> bool:
     """Render the baked material inside Blender before StudioMDL is launched."""
     scene = bpy.context.scene
@@ -1448,6 +1471,7 @@ def rebuild_atlas_and_bake(
             alpha["error"] = str(exc)
             log(f"Alpha transfer failed, the baked atlas stays opaque: {exc}")
     flattened = flatten_unpainted(image, painted)
+    atlas_file = persist_bake_image(image, generated / f"{slug}_baked_atlas.png")
 
     if bake_source.name in bpy.data.objects:
         bpy.data.objects.remove(bake_source, do_unlink=True)
@@ -1470,6 +1494,7 @@ def rebuild_atlas_and_bake(
         "unpainted_fill": flattened,
         "material_proofs": proofs,
         "image": image.name,
+        "atlas_file": atlas_file,
         "method": "cycles_selected_to_active_diffuse_colour",
         "source_uv_reused": False,
     })

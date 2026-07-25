@@ -93,6 +93,16 @@ def test_the_sentinel_never_reaches_the_exported_texture():
     assert "flattened = flatten_unpainted(image, painted)" in PIPELINE
 
 
+def test_the_baked_atlas_survives_reopening_the_saved_blender_source():
+    # A generated image stores only its generation settings in a .blend, so the
+    # atlas has to become file backed before the source file is written.
+    section = PIPELINE[PIPELINE.index("def persist_bake_image"):PIPELINE.index("def render_material_proof")]
+    assert "image.filepath_raw = str(path)" in section
+    assert "image.save()" in section
+    assert "image.pack()" in section
+    assert PIPELINE.index("atlas_file = persist_bake_image(") < PIPELINE.index("bpy.ops.wm.save_as_mainfile")
+
+
 def test_texture_bake_results_are_reported_to_the_builder_interface():
     for key in (
         "uv_atlas_rebuilt_on_reduced_mesh",
