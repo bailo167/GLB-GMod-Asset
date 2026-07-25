@@ -216,3 +216,34 @@ def test_boolean_and_scalar_rows_are_unchanged():
     assert _check_row_state("studiomdl_compiled", True) is True
     assert _check_row_state("studiomdl_compiled", False) is False
     assert _check_row_state("valid_vtf_count", 1) is True
+
+
+def test_left_and_right_foot_ik_chains_use_the_same_valve_knee_direction():
+    # ValveBiped leg bones are not axis mirrored, so Valve's player QCs give
+    # BOTH feet the same knee hint. The earlier mirrored "0 1 0" on the left
+    # chain bent the left knee backwards whenever walking foot IK engaged.
+    section = PIPELINE[PIPELINE.index("def _write_ik_qci"):PIPELINE.index("def _write_ragdoll_qci")]
+    assert "$ikchain rfoot ValveBiped.Bip01_R_Foot knee 0.707107 -0.707107 0.000000" in section
+    assert "$ikchain lfoot ValveBiped.Bip01_L_Foot knee 0.707107 -0.707107 0.000000" in section
+    assert "knee 0 1 0" not in section
+    assert "knee 0 -1 0" not in section
+
+
+def test_no_decimated_lods_are_generated():
+    # Decimating the rebuilt atlas either merges island loops or cracks the
+    # split seams, and StudioMDL measured LOD1 diverging by 11,674 vertices.
+    # The reference mesh is used at every distance.
+    section = PIPELINE[PIPELINE.index("ratios: list[float] = []"):PIPELINE.index("physics = create_physics_mesh")]
+    assert "duplicate_lod" in section  # the machinery stays, the list is empty
+
+
+def test_gaps_are_flood_filled_and_the_sentinel_is_neutral():
+    assert "dilation_passes = 2 * texture_size" in PIPELINE
+    assert "BAKE_SENTINEL = (0.42, 0.42, 0.42, 0.0)" in PIPELINE
+
+
+def test_the_vtf_ships_a_full_mip_chain():
+    writer = (ROOT / "ember_gmod" / "vtf_writer.py").read_text(encoding="utf-8")
+    assert "def build_mip_chain" in writer
+    assert "chain = build_mip_chain(image.pixels_bgra, image.width, image.height)" in writer
+    assert "flags = TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_NOLOD" not in writer

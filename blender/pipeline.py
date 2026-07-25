@@ -925,7 +925,13 @@ def create_physics_mesh(armature: bpy.types.Object, bones: list[dict[str, Any]],
     return physics
 
 
-BAKE_SENTINEL = (1.0, 0.0, 1.0, 0.0)
+# The sentinel marks texels the bake never wrote. Zero alpha is the actual
+# detection key, because a Cycles bake writes full alpha on every texel it
+# touches. The RGB is a neutral grey so that even a texel that somehow escapes
+# the flood fill can never appear as a loud wrong colour in game; the earlier
+# magenta sentinel showed up as pink confetti when distant sampling reached
+# atlas gaps.
+BAKE_SENTINEL = (0.42, 0.42, 0.42, 0.0)
 BAKE_RASTER_RESOLUTION = 256
 BAKE_UV_LAYER = "ember_bake"
 
@@ -1575,7 +1581,13 @@ def rebuild_atlas_and_bake(
             alpha["applied"] = False
             alpha["error"] = str(exc)
             log(f"Alpha transfer failed, the baked atlas stays opaque: {exc}")
-    dilation_passes = max(4, margin_pixels)
+    # Flood the island colours across the ENTIRE gap area, not just a margin.
+    # More than half the atlas is gap between islands; the game samples into it
+    # with bilinear and anisotropic filtering, and any texel left as a flat
+    # average colour shows up as noise on the model at distance. Flooding until
+    # the frontier is empty means every gap texel carries the colour of the
+    # nearest island.
+    dilation_passes = 2 * texture_size
     flattened = flatten_unpainted(image, painted, dilation_passes)
     shipped = flattened.pop("mask")
     # The verdict measures the atlas that actually ships, after the bake margin
@@ -1738,7 +1750,7 @@ def extract_materials(obj: bpy.types.Object, materials_dir: Path, texture_size: 
         vmt_lines.append('}')
         vmt = materials_dir / f"{base}.vmt"
         vmt.write_text("\n".join(vmt_lines) + "\n", encoding="utf-8")
-        compile_options = ["nomip 1", "nocompress 1"]
+        compile_options = ["nocompress 1"]
         if not has_alpha:
             compile_options.append("stripalphachannel 1")
         (materials_dir / f"{base}.txt").write_text("\n".join(compile_options) + "\n", encoding="utf-8")
@@ -2208,11 +2220,15 @@ def _write_hitbox_qci(modelsrc: Path) -> Path:
 
 def _write_ik_qci(modelsrc: Path) -> Path:
     path = modelsrc / "standardikchains.qci"
+    # These are Valve's own knee direction hints from the stock player QCs. The
+    # ValveBiped skeleton is NOT axis mirrored between the legs, so both feet use
+    # the same hint. The previous mirrored "0 1 0" on the left chain told the IK
+    # solver to bend the left knee backwards whenever walking foot IK engaged.
     lines = [
-        '$ikchain rhand ValveBiped.Bip01_R_Hand knee 0 -1 0',
-        '$ikchain lhand ValveBiped.Bip01_L_Hand knee 0 1 0',
-        '$ikchain rfoot ValveBiped.Bip01_R_Foot knee 0 -1 0',
-        '$ikchain lfoot ValveBiped.Bip01_L_Foot knee 0 1 0',
+        '$ikchain rhand ValveBiped.Bip01_R_Hand knee 0.707107 0.707107 0.000000',
+        '$ikchain lhand ValveBiped.Bip01_L_Hand knee 0.707107 0.707107 0.000000',
+        '$ikchain rfoot ValveBiped.Bip01_R_Foot knee 0.707107 -0.707107 0.000000',
+        '$ikchain lfoot ValveBiped.Bip01_L_Foot knee 0.707107 -0.707107 0.000000',
     ]
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return path
@@ -2451,7 +2467,14 @@ def main(config_path: Path) -> None:
     if not pose_probe["passed"]:
         raise RuntimeError("The deterministic deformation probe rejected this rig before compilation: " + json.dumps(pose_probe))
 
-    ratios = {"fast": [0.45], "good": [0.65, 0.35], "workshop": [0.72, 0.45, 0.20]}[quality]
+    # V2.2.4: no decimated LODs. The rebuilt atlas is thousands of small UV
+    # islands; a Decimate pass on that either merges island loops (the original
+    # scrambling bug) or, with the seams split first, leaves boundary vertices
+    # free to drift apart into cracks. StudioMDL confirmed the drift: LOD1 alone
+    # introduced 11,674 vertices that no longer matched the reference. A 32k
+    # triangle player model needs no distance LODs, so the reference is used at
+    # every distance and always looks like the proof render.
+    ratios: list[float] = []
     lod_objects = [duplicate_lod(obj, f"character_lod{index}", ratio) for index, ratio in enumerate(ratios, 1)]
     lod_atlas: dict[str, Any] = {}
     for lod_obj in lod_objects:

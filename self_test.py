@@ -117,7 +117,9 @@ class EmberV2SelfTest(unittest.TestCase):
             self.assertEqual(info.width, 4)
             self.assertEqual(info.height, 4)
             self.assertEqual(info.image_offset, 88)
-            self.assertEqual(vtf.stat().st_size, 152)
+            # 4x4 with a full mip chain: 4x4 + 2x2 + 1x1 = 21 texels of BGRA.
+            self.assertEqual(info.mip_count, 3)
+            self.assertEqual(vtf.stat().st_size, 88 + 21 * 4)
             self.assertEqual(inspect_vtf(vtf), info)
 
     def test_vtex_source_tga_uses_24_bit_when_opaque(self) -> None:
@@ -209,7 +211,7 @@ class EmberV2SelfTest(unittest.TestCase):
         self.assertIn('id="glCanvas"', html)
         self.assertIn('id="landmarkList"', html)
         self.assertIn('id="lockGuideBtn"', html)
-        self.assertIn("REQUIRED_SERVICE_VERSION = '2.2.3'", app)
+        self.assertIn("REQUIRED_SERVICE_VERSION = '2.2.4'", app)
         self.assertIn("raycast", viewer)
         self.assertIn("autoSeed", viewer)
 

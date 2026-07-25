@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.2.4, 25 July 2026
+
+The 2.2.3 build compiled, installed and passed every check, and the Blender proof renders were correct, but in game the model dissolved into pink and beige noise at distance and the left knee bent backwards while walking.
+
+* Fixed the left knee. The generated IK chains gave the left foot a mirrored knee direction hint, but ValveBiped leg bones are not axis mirrored: Valve's own player QCs use the same hint for both feet. The left chain told the solver to bend the knee backwards whenever walking foot IK engaged. Both feet now use Valve's exact values.
+* The VTF now ships a full mip chain instead of a single NOMIP level. Blender pre-filters textures automatically, which is why the proofs looked clean while the game, sampling a 1024 atlas of thousands of small UV islands with no mips, picked essentially arbitrary texels at distance.
+* Island colours are flood filled across the entire gap area of the atlas. Over half the atlas is gap; it was previously filled with the model's average colour, which for a skin heavy character is pink, and distant sampling reached it. Every gap texel now carries the colour of its nearest island.
+* The bake sentinel is a neutral grey with zero alpha rather than magenta, so nothing loud can ever appear even if a texel escapes.
+* Removed the decimated distance LODs. Decimating the rebuilt atlas either merges island loops or cracks the split seams, and StudioMDL measured LOD1 diverging by 11,674 vertices. The 32k reference is used at every distance and always matches the proof render.
+
+## 2.2.3, 25 July 2026
 ## 2.2.3, 25 July 2026
 
 * Rescales the locked guide to the mesh height before anything reads it. The Jack Hegarty guide was locked at 72 inches while the project height was later 64, so every landmark sat 12.5% off the body and the skeleton conformance stage rejected the build with an average displacement of 5.1 units. The guide's own vertical extent identifies the scale it was locked at, and landmarks and rigid zones are scaled uniformly about the ground point.

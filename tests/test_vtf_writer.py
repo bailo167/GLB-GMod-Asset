@@ -26,12 +26,14 @@ def test_internal_vtf_writer_produces_complete_7_2_file(tmp_path: Path):
     assert info.height == 4
     assert info.image_format == IMAGE_FORMAT_BGRA8888
     assert info.low_res_format == IMAGE_FORMAT_DXT1
-    assert info.mip_count == 1
-    assert info.flags & TEXTUREFLAGS_NOMIP
-    assert info.flags & TEXTUREFLAGS_NOLOD
+    # Full mip chain: 4x4, 2x2, 1x1. Distant sampling needs prefiltered levels;
+    # a single-level NOMIP texture dissolved the model into noise in game.
+    assert info.mip_count == 3
+    assert not info.flags & TEXTUREFLAGS_NOMIP
+    assert not info.flags & TEXTUREFLAGS_NOLOD
     assert not info.flags & TEXTUREFLAGS_EIGHTBITALPHA
     assert output.read_bytes()[:4] == b"VTF\x00"
-    assert output.stat().st_size == 80 + 8 + 4 * 4 * 4
+    assert output.stat().st_size == 80 + 8 + (16 + 4 + 1) * 4
     assert inspect_vtf(output) == info
 
 
@@ -86,3 +88,36 @@ def test_colour_vtf_sets_srgb_while_normal_map_does_not(tmp_path: Path):
     assert not (colour_info.flags & TEXTUREFLAGS_NORMAL)
     assert normal_info.flags & TEXTUREFLAGS_NORMAL
     assert not (normal_info.flags & TEXTUREFLAGS_SRGB)
+
+
+def test_mip_chain_is_a_box_filter_of_the_level_above(tmp_path: Path):
+    from ember_gmod.vtf_writer import build_mip_chain, expected_mip_count
+
+    # A 2x2 image of four solid quadrant colours must average into its 1x1 mip.
+    base = bytes([255, 0, 0, 255,  0, 255, 0, 255,
+                  0, 0, 255, 255,  255, 255, 255, 255])
+    chain = build_mip_chain(base, 2, 2)
+    assert len(chain) == expected_mip_count(2, 2) == 2
+    smallest, width, height = chain[-1]
+    assert (width, height) == (1, 1)
+    assert list(smallest) == [128, 128, 128, 255]
+
+    tall = build_mip_chain(bytes(8 * 1 * 4), 1, 8)
+    assert [(w, h) for _p, w, h in tall] == [(1, 8), (1, 4), (1, 2), (1, 1)]
+
+
+def test_inspect_rejects_a_vtf_without_a_full_mip_chain(tmp_path: Path):
+    source = tmp_path / "body.tga"
+    output = tmp_path / "body.vtf"
+    write_uncompressed_tga(source, 4, 4, [0.5, 0.5, 0.5, 1.0] * 16, srgb=True, include_alpha=False)
+    write_vtf_from_tga(source, output)
+    data = bytearray(output.read_bytes())
+    data[56] = 1  # claim a single mip level
+    truncated = tmp_path / "single.vtf"
+    truncated.write_bytes(bytes(data))
+    try:
+        inspect_vtf(truncated)
+    except ValueError as exc:
+        assert "mip" in str(exc)
+    else:
+        raise AssertionError("a mipless VTF was accepted")
