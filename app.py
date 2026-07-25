@@ -65,7 +65,7 @@ def parse_multipart(headers, body: bytes) -> tuple[dict[str, str], dict[str, tup
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "EmberGModBuilder/2.2.5"
+    server_version = "EmberGModBuilder/2.2.6"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stdout.write("[HTTP] " + fmt % args + "\n")
@@ -108,7 +108,7 @@ class Handler(BaseHTTPRequestHandler):
                 cfg = CONFIG_STORE.load()
                 self.send_json({
                     "name": "Ember Guided GMod Character Builder",
-                    "version": "2.2.5",
+                    "version": "2.2.6",
                     "workspace": str(WORKSPACE),
                     "toolchain": tool_status(cfg),
                 })
@@ -185,7 +185,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 project_matches = str(result.get("project_id", "")) == record.id
                 build_matches = bool(record.last_job_id) and str(result.get("build_token", "")) == str(record.last_job_id)
-                version_matches = str(result.get("version", "")) == "2.2.5"
+                version_matches = str(result.get("version", "")) == "2.2.6"
                 result["project_matches"] = project_matches
                 result["build_matches"] = build_matches
                 result["version_matches"] = version_matches
@@ -349,6 +349,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path = urllib.parse.urlparse(self.path).path
             body = self.read_body()
+            m = re.fullmatch(r"/api/projects/([a-f0-9]{12})/options", path)
+            if m:
+                raw = json.loads(body.decode("utf-8")) if body else {}
+                if not isinstance(raw, dict):
+                    self.send_error_json(400, "Options payload must be a JSON object.")
+                    return
+                record = PROJECTS.update_options(m.group(1), raw)
+                self.send_json(record.to_dict())
+                return
             m = re.fullmatch(r"/api/projects/([a-f0-9]{12})/guide", path)
             if not m:
                 self.send_error_json(404, "Unknown API route.")

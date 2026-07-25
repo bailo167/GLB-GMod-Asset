@@ -12,7 +12,7 @@ from .vtf_writer import inspect_vtf
 
 
 MODEL_EXTENSIONS = (".mdl", ".vvd", ".dx90.vtx", ".phy")
-VERSION = "2.2.5"
+VERSION = "2.2.6"
 
 
 def _inside(root: Path, candidate: Path) -> bool:

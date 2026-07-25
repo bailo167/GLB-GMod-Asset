@@ -4,7 +4,7 @@ EMBER TOOL META
 name: Ember Guided GMod Character Builder
 slug: ember-guided-gmod-character-builder
 category: 3D Pipeline
-version: 2.2.5
+version: 2.2.6
 status: guided-workbench
 updated: 2026-07-25
 offline: true
@@ -18,7 +18,7 @@ layout: workbench
   <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
   <title>Ember Guided GMod Character Builder</title>
   <script type="application/json" id="ember-tool-meta">
-  {"name":"Ember Guided GMod Character Builder","slug":"ember-guided-gmod-character-builder","category":"3D Pipeline","summary":"Guided GLB landmark rigging and native Garry's Mod player model compilation.","description":"A Windows local workbench for orienting a humanoid GLB, assigning body landmarks, fitting ValveBiped, compiling native Source materials and models, installing the addon, and validating it inside Garry's Mod.","version":"2.2.5","status":"guided-workbench","updated":"2026-07-25","offline":true,"storage":"local project workspace","tags":["gmod","glb","valvebiped","blender","guided-rigging","windows"],"entry":"start.bat","layout":"workbench"}
+  {"name":"Ember Guided GMod Character Builder","slug":"ember-guided-gmod-character-builder","category":"3D Pipeline","summary":"Guided GLB landmark rigging and native Garry's Mod player model compilation.","description":"A Windows local workbench for orienting a humanoid GLB, assigning body landmarks, fitting ValveBiped, compiling native Source materials and models, installing the addon, and validating it inside Garry's Mod.","version":"2.2.6","status":"guided-workbench","updated":"2026-07-25","offline":true,"storage":"local project workspace","tags":["gmod","glb","valvebiped","blender","guided-rigging","windows"],"entry":"start.bat","layout":"workbench"}
   </script>
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -144,6 +144,15 @@ layout: workbench
           <div><span class="eyebrow">Stage 03</span><h1>BUILD AND PROVE IT.</h1><p>Generate a region weighted ValveBiped rig, run the deformation probe, compile the model, install it automatically, then read the in game runtime result.</p></div>
           <div class="actions"><button class="btn primary" id="runBuildBtn">Build + Install</button><button class="btn" id="installBtn">Repair Installation</button><button class="btn" id="runtimeCheckBtn">Read GMod Runtime Check</button></div>
         </div>
+        <article class="card settings-card">
+          <div class="card-head"><h2>BUILD SETTINGS</h2><button class="btn small primary" id="saveOptionsBtn">Save Settings</button></div>
+          <div class="settings-grid">
+            <label>Build quality<select id="optQuality"><option value="fast">Fast, 18K triangles</option><option value="good">Good, 32K triangles</option><option value="workshop">Workshop, 48K triangles</option></select></label>
+            <label>Texture size<select id="optTextureSize"><option>512</option><option>1024</option><option>2048</option></select></label>
+            <label>Source height, inches<input id="optTargetHeight" type="number" min="36" max="120" step="1" value="72"></label>
+          </div>
+          <p class="small-copy">These apply to the next build. The locked guide is preserved: the build rescales it to the chosen height automatically. 72 inches is standard player height; 2048 texture and Workshop quality give the sharpest result.</p>
+        </article>
         <div class="pipeline" id="pipelineStages">
           <div data-stage="guide"><b>01</b><span>Guide</span><small>Locked landmarks</small></div>
           <div data-stage="blender"><b>02</b><span>Blender</span><small>Rig, weights, LOD and physics</small></div>
@@ -184,7 +193,7 @@ layout: workbench
       </section>
 
       <section class="panel-page" id="panel-toolchain">
-        <div class="page-head compact"><div><span class="eyebrow">Stage 05</span><h1>WINDOWS TOOLCHAIN.</h1><p>Paths are auto detected where possible. V2.2.5 writes validated Source VTF files internally, compiles with StudioMDL and installs the verified addon automatically.</p></div></div>
+        <div class="page-head compact"><div><span class="eyebrow">Stage 05</span><h1>WINDOWS TOOLCHAIN.</h1><p>Paths are auto detected where possible. V2.2.6 writes validated Source VTF files internally, compiles with StudioMDL and installs the verified addon automatically.</p></div></div>
         <div class="toolchain-grid">
           <article class="card form-card">
             <label>Blender executable<input id="cfgBlender" placeholder="C:\Program Files\Blender Foundation\...\blender.exe"></label>
@@ -202,7 +211,7 @@ layout: workbench
         </div>
       </section>
 
-      <footer>Ember Guided GMod Character Builder v2.2.5 · Windows local service · No remote requests · Workspace storage</footer>
+      <footer>Ember Guided GMod Character Builder v2.2.6 · Windows local service · No remote requests · Workspace storage</footer>
     </main>
   </div>
   <div id="toastStack" class="toast-stack" aria-live="polite"></div>

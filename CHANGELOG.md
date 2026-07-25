@@ -1,5 +1,10 @@
 # Changelog
 
+## 2.2.6, 25 July 2026
+
+* Build settings can now change after a project is created. A Build Settings card on the Build page edits quality, texture size and Source height; the locked guide is preserved because every build rescales it to the chosen height. Identity fields such as the slug stay fixed.
+* Fixed the unpainted region gate rejecting dense meshes. A real 48,000 triangle build was stopped with 3.773% of island area unpainted while the largest connected hole was 0.032%: thousands of pinprick texels from measuring the raw bake mask at raster resolution, not a bake failure. Only the largest connected hole decides the verdict now; the pinpricks are filled by the flood pass and the shipped atlas coverage is measured separately at full resolution. A genuine bake void is a large connected hole and still fails.
+
 ## 2.2.5, 25 July 2026
 
 * Fixed the vertical texture orientation of every exported SMD. The exporter wrote `1.0 - v` for each vertex, but the SMD text format stores V in the same bottom origin convention Blender uses and StudioMDL performs the DirectX flip itself. The game therefore sampled the atlas vertically mirrored in every release since 2.0 while the Blender proof renders looked correct. This was the final difference between the proof and the game: the 2.2.4 build showed coherent patches of valid colour in mirrored atlas positions, with the flood filled gap colours in between.
@@ -14,7 +19,6 @@ The 2.2.3 build compiled, installed and passed every check, and the Blender proo
 * The bake sentinel is a neutral grey with zero alpha rather than magenta, so nothing loud can ever appear even if a texel escapes.
 * Removed the decimated distance LODs. Decimating the rebuilt atlas either merges island loops or cracks the split seams, and StudioMDL measured LOD1 diverging by 11,674 vertices. The 32k reference is used at every distance and always matches the proof render.
 
-## 2.2.3, 25 July 2026
 ## 2.2.3, 25 July 2026
 
 * Rescales the locked guide to the mesh height before anything reads it. The Jack Hegarty guide was locked at 72 inches while the project height was later 64, so every landmark sat 12.5% off the body and the skeleton conformance stage rejected the build with an average displacement of 5.1 units. The guide's own vertical extent identifies the scale it was locked at, and landmarks and rigid zones are scaled uniformly about the ground point.

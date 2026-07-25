@@ -79,3 +79,27 @@ def test_create_and_package(tmp_path: Path):
         assert "source/model.glb" in names
         assert "addon/addon.json" in names
         assert artifact.name not in names
+
+
+
+def test_build_settings_can_change_after_creation_without_touching_identity(tmp_path: Path):
+    store = ProjectStore(tmp_path / "ws")
+    record = store.create(io.BytesIO(glb_bytes()), "input.glb", BuildOptions.from_dict({
+        "display_name": "Jack Hegarty", "quality": "good", "texture_size": 1024, "target_height": 64,
+    }))
+    updated = store.update_options(record.id, {
+        "quality": "workshop", "texture_size": 2048, "target_height": 72,
+        # identity and unknown fields must be ignored
+        "slug": "hijacked", "display_name": "Hijacked", "rig_mode": "raw", "nonsense": 1,
+    })
+    assert updated.options.quality == "workshop"
+    assert updated.options.texture_size == 2048
+    assert updated.options.target_height == 72.0
+    assert updated.options.slug == record.options.slug
+    assert updated.options.display_name == "Jack Hegarty"
+    assert updated.options.rig_mode == "guided"
+    # invalid values fall back to safe defaults rather than erroring
+    clamped = store.update_options(record.id, {"texture_size": 9999, "quality": "ultra", "target_height": 900})
+    assert clamped.options.texture_size == 1024
+    assert clamped.options.quality == "good"
+    assert clamped.options.target_height == 120.0
