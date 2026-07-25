@@ -12,7 +12,7 @@ from .vtf_writer import inspect_vtf
 
 
 MODEL_EXTENSIONS = (".mdl", ".vvd", ".dx90.vtx", ".phy")
-VERSION = "2.2.6"
+VERSION = "2.3.0"
 
 
 def _inside(root: Path, candidate: Path) -> bool:
@@ -29,11 +29,11 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _verify_compiled_model(addon: Path, slug: str) -> list[str]:
-    model_dir = addon / "models" / "player" / slug
+def _verify_compiled_model(addon: Path, slug: str, category: str = "player") -> list[str]:
+    model_dir = addon / "models" / category / slug
     missing = [str(model_dir / f"{slug}{ext}") for ext in MODEL_EXTENSIONS if not (model_dir / f"{slug}{ext}").is_file()]
     if missing:
-        raise RuntimeError("Compiled player model output is incomplete: " + ", ".join(missing))
+        raise RuntimeError("Compiled model output is incomplete: " + ", ".join(missing))
     mdl = model_dir / f"{slug}.mdl"
     if mdl.stat().st_size < 1024:
         raise RuntimeError("Compiled MDL is unexpectedly small and was not installed.")
@@ -50,6 +50,8 @@ def install_to_gmod(
     display_name: str,
     project_id: str,
     build_token: str = "",
+    asset_type: str = "character",
+    generate_npcs: bool = False,
 ) -> dict[str, Any]:
     """Install both as a managed addon and as verified direct game content.
 
@@ -59,6 +61,7 @@ def install_to_gmod(
     """
     addon_source = addon_source.resolve()
     game_dir = game_dir.resolve()
+    category = "props" if asset_type == "prop" else "player"
     if not (game_dir / "gameinfo.txt").is_file():
         raise RuntimeError("The selected Garry's Mod game directory does not contain gameinfo.txt.")
     ensure_runtime_addon_files(
@@ -67,10 +70,12 @@ def install_to_gmod(
         display_name,
         project_id=project_id,
         build_token=build_token,
+        asset_type=asset_type,
+        generate_npcs=generate_npcs,
     )
-    _verify_compiled_model(addon_source, slug)
+    _verify_compiled_model(addon_source, slug, category)
 
-    materials_dir = addon_source / "materials" / "models" / "player" / slug
+    materials_dir = addon_source / "materials" / "models" / category / slug
     if not materials_dir.is_dir() or not any(materials_dir.glob("*.vmt")) or not any(materials_dir.glob("*.vtf")):
         raise RuntimeError("Source materials are incomplete. At least one VMT and validated VTF are required.")
     invalid_vtf: list[str] = []
@@ -149,11 +154,16 @@ def install_to_gmod(
 
     required_runtime = [
         f"lua/autorun/ember_{slug}.lua",
-        f"lua/autorun/client/00_ember_{slug}_player.lua",
-        f"lua/entities/ember_{slug}_ragdoll/shared.lua",
-        f"models/player/{slug}/{slug}.mdl",
-        f"materials/models/player/{slug}",
+        f"models/{category}/{slug}/{slug}.mdl",
+        f"materials/models/{category}/{slug}",
     ]
+    if asset_type == "character":
+        required_runtime.extend([
+            f"lua/autorun/client/00_ember_{slug}_player.lua",
+            f"lua/entities/ember_{slug}_ragdoll/shared.lua",
+        ])
+        if generate_npcs:
+            required_runtime.append(f"lua/entities/ember_{slug}_npc_base/shared.lua")
     missing_after_install: list[str] = []
     for relative in required_runtime:
         candidate = game_dir / relative
@@ -166,44 +176,44 @@ def install_to_gmod(
         raise RuntimeError("Post install verification failed: " + ", ".join(missing_after_install))
 
     registration_text = (game_dir / f"lua/autorun/ember_{slug}.lua").read_text(encoding="utf-8", errors="replace")
-    client_registration_text = (game_dir / f"lua/autorun/client/00_ember_{slug}_player.lua").read_text(encoding="utf-8", errors="replace")
-    expected_model = f"models/player/{slug}/{slug}.mdl"
+    expected_model = f"models/{category}/{slug}/{slug}.mdl"
     if f'local ID = "{slug}"' not in registration_text or expected_model not in registration_text:
-        raise RuntimeError("Installed player model registration does not contain the expected ID and model path.")
-    required_registration = (
-        "player_manager.AddValidModel(ID, MODEL)",
-        'list.Set("PlayerOptionsModel", DISPLAY, MODEL)',
-        'hook.Add("InitPostEntity"',
-        "spawnmenu.AddPropCategory",
-        "file.Write(RESULT_FILE",
-    )
+        raise RuntimeError("Installed registration does not contain the expected ID and model path.")
+    if asset_type == "character":
+        client_registration_text = (game_dir / f"lua/autorun/client/00_ember_{slug}_player.lua").read_text(encoding="utf-8", errors="replace")
+        required_registration = (
+            "player_manager.AddValidModel(ID, MODEL)",
+            'list.Set("PlayerOptionsModel", DISPLAY, MODEL)',
+            'hook.Add("InitPostEntity"',
+            "spawnmenu.AddPropCategory",
+            "file.Write(RESULT_FILE",
+        )
+        required_client_registration = (
+            "player_manager.AddValidModel(ID, MODEL)",
+            'list.Set("PlayerOptionsModel", ID, MODEL)',
+            'list.Set("PlayerOptionsModel", DISPLAY, MODEL)',
+            'hook.Add("PopulatePlayerOptions"',
+            "timer.Simple(5, register)",
+        )
+    else:
+        client_registration_text = ""
+        required_registration = (
+            "spawnmenu.AddPropCategory",
+            "resource.AddFile(MODEL)",
+            "file.Write(RESULT_FILE",
+        )
+        required_client_registration = ()
     missing_registration = [token for token in required_registration if token not in registration_text]
     if missing_registration:
         raise RuntimeError("Installed runtime registration is incomplete: " + ", ".join(missing_registration))
     if "resource.AddSingleFile" in registration_text:
         raise RuntimeError("Installed registration still contains the removed resource.AddSingleFile call.")
-    required_client_registration = (
-        "player_manager.AddValidModel(ID, MODEL)",
-        'list.Set("PlayerOptionsModel", ID, MODEL)',
-        'list.Set("PlayerOptionsModel", DISPLAY, MODEL)',
-        'hook.Add("PopulatePlayerOptions"',
-        "timer.Simple(5, register)",
-    )
     missing_client = [token for token in required_client_registration if token not in client_registration_text]
     if missing_client:
         raise RuntimeError("Installed dedicated client selector registration is incomplete: " + ", ".join(missing_client))
 
-    manifest = {
-        "version": VERSION,
-        "project_id": project_id,
-        "build_token": build_token,
-        "slug": slug,
-        "display_name": display_name,
-        "installed": time.time(),
-        "managed_addon": str(target),
-        "direct_files": sorted(direct_files),
-        "sha256": hashes,
-        "verification": {
+    if asset_type == "character":
+        verification = {
             "shared_player_registration": True,
             "dedicated_client_registration": True,
             "player_options_model": 'list.Set("PlayerOptionsModel", DISPLAY, MODEL)' in registration_text,
@@ -212,12 +222,36 @@ def install_to_gmod(
             "runtime_result_sentinel": runtime_result_path.is_file(),
             "spawnlist_registration": "spawnmenu.AddPropCategory" in registration_text,
             "spawnable_entity": (game_dir / f"lua/entities/ember_{slug}_ragdoll/shared.lua").is_file(),
+            "npc_entities_installed": (game_dir / f"lua/entities/ember_{slug}_npc_base/shared.lua").is_file() if generate_npcs else True,
             "compiled_model": True,
             "materials": True,
             "full_vtf_validation": True,
             "runtime_validation_required": True,
             "all_direct_file_hashes_verified": True,
-        },
+        }
+    else:
+        verification = {
+            "prop_registration": True,
+            "runtime_result_sentinel": runtime_result_path.is_file(),
+            "spawnlist_registration": "spawnmenu.AddPropCategory" in registration_text,
+            "compiled_model": True,
+            "materials": True,
+            "full_vtf_validation": True,
+            "runtime_validation_required": True,
+            "all_direct_file_hashes_verified": True,
+        }
+    manifest = {
+        "version": VERSION,
+        "project_id": project_id,
+        "build_token": build_token,
+        "slug": slug,
+        "display_name": display_name,
+        "asset_type": asset_type,
+        "installed": time.time(),
+        "managed_addon": str(target),
+        "direct_files": sorted(direct_files),
+        "sha256": hashes,
+        "verification": verification,
     }
     manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return {

@@ -7,8 +7,57 @@ import zlib
 from pathlib import Path
 
 
-VERSION = "2.2.6"
+VERSION = "2.3.0"
 _SLUG_RE = re.compile(r"^[a-z0-9_]{1,48}$")
+
+# Hostile NPC variants use stock Half-Life 2 world weapon models, which every
+# Garry's Mod installation already mounts, so armed variants never require
+# extra content. The w_ models carry a ValveBiped.Bip01_R_Hand bone, so a
+# bonemerged child entity sits correctly in the character's right hand.
+NPC_VARIANTS = (
+    {
+        "suffix": "friendly",
+        "label": "Friendly",
+        "hostile": False,
+        "weapon": None,
+    },
+    {
+        "suffix": "hostile",
+        "label": "Hostile",
+        "hostile": True,
+        "weapon": None,
+    },
+    {
+        "suffix": "pistol",
+        "label": "Hostile, Pistol",
+        "hostile": True,
+        "weapon": {
+            "model": "models/weapons/w_pistol.mdl",
+            "damage": 8, "pellets": 1, "interval": 0.7, "range": 900,
+            "spread": 0.02, "sound": "Weapon_Pistol.Single",
+        },
+    },
+    {
+        "suffix": "smg",
+        "label": "Hostile, SMG",
+        "hostile": True,
+        "weapon": {
+            "model": "models/weapons/w_smg1.mdl",
+            "damage": 3, "pellets": 1, "interval": 0.12, "range": 850,
+            "spread": 0.045, "sound": "Weapon_SMG1.Single",
+        },
+    },
+    {
+        "suffix": "shotgun",
+        "label": "Hostile, Shotgun",
+        "hostile": True,
+        "weapon": {
+            "model": "models/weapons/w_shotgun.mdl",
+            "damage": 3, "pellets": 7, "interval": 1.1, "range": 550,
+            "spread": 0.06, "sound": "Weapon_Shotgun.Single",
+        },
+    },
+)
 
 
 def _lua_string(value: str) -> str:
@@ -45,6 +94,395 @@ def _write_entity_icon(path: Path) -> None:
     path.write_bytes(payload)
 
 
+def _entity_boilerplate(entity_dir: Path) -> None:
+    (entity_dir / "init.lua").write_text('AddCSLuaFile("cl_init.lua")\nAddCSLuaFile("shared.lua")\ninclude("shared.lua")\n', encoding="utf-8")
+    (entity_dir / "cl_init.lua").write_text('include("shared.lua")\n', encoding="utf-8")
+
+
+def _remove_npc_entities(lua_root: Path, slug: str) -> list[str]:
+    import shutil as _shutil
+
+    entities = lua_root / "entities"
+    if entities.is_dir():
+        for stale in entities.glob(f"ember_{slug}_npc_*"):
+            if stale.is_dir():
+                _shutil.rmtree(stale)
+    return []
+
+
+def _write_npc_entities(lua_root: Path, slug: str, display_name: str, model_path: str, icon_material: str) -> list[str]:
+    """Generate a NextBot base plus friendly, hostile and armed variants.
+
+    The compiled player model includes the stock HL2MP animation library, so a
+    NextBot can drive it with ACT_HL2MP activities and BodyMoveXY pose blending.
+    One generated base carries all behaviour; each spawnable variant only sets
+    its disposition and weapon table.
+    """
+    _remove_npc_entities(lua_root, slug)
+    base_class = f"ember_{slug}_npc_base"
+    base_dir = lua_root / "entities" / base_class
+    base_dir.mkdir(parents=True, exist_ok=True)
+    base_lines = [
+        "AddCSLuaFile()",
+        "",
+        'ENT.Base = "base_nextbot"',
+        'ENT.Type = "nextbot"',
+        f"ENT.PrintName = {_lua_string(display_name + ' NPC Base')}",
+        'ENT.Category = "Ember Character Builder"',
+        'ENT.Author = "Ember Guided Character Builder"',
+        "ENT.Spawnable = false",
+        "ENT.AdminOnly = false",
+        "",
+        f"ENT.EmberModel = {_lua_string(model_path)}",
+        "ENT.EmberHostile = false",
+        "ENT.EmberHealth = 120",
+        "ENT.EmberWalkSpeed = 80",
+        "ENT.EmberRunSpeed = 240",
+        "ENT.EmberAttackRange = 68",
+        "ENT.EmberAttackDamage = 12",
+        "ENT.EmberAttackInterval = 0.9",
+        "ENT.EmberWeaponModel = nil",
+        "ENT.EmberRangedDamage = 0",
+        "ENT.EmberRangedPellets = 1",
+        "ENT.EmberRangedInterval = 1",
+        "ENT.EmberRangedRange = 0",
+        "ENT.EmberRangedSpread = 0.03",
+        "ENT.EmberRangedSound = nil",
+        "",
+        "if SERVER then",
+        "",
+        "function ENT:Initialize()",
+        "    self:SetModel(self.EmberModel)",
+        "    self:SetHealth(self.EmberHealth)",
+        "    self:SetMaxHealth(self.EmberHealth)",
+        "    self:SetBloodColor(BLOOD_COLOR_RED)",
+        "    self.loco:SetDeathDropHeight(220)",
+        "    self.loco:SetJumpHeight(58)",
+        "    self.loco:SetStepHeight(18)",
+        "    if self.EmberWeaponModel then",
+        '        local weapon = ents.Create("prop_dynamic")',
+        "        if IsValid(weapon) then",
+        "            weapon:SetModel(self.EmberWeaponModel)",
+        "            weapon:SetPos(self:GetPos())",
+        "            weapon:SetParent(self)",
+        "            weapon:AddEffects(EF_BONEMERGE)",
+        "            weapon:SetSolid(SOLID_NONE)",
+        "            weapon:Spawn()",
+        "            self.EmberWeapon = weapon",
+        "        end",
+        "    end",
+        "end",
+        "",
+        "function ENT:OnRemove()",
+        "    if IsValid(self.EmberWeapon) then self.EmberWeapon:Remove() end",
+        "end",
+        "",
+        "function ENT:OnKilled(damageInfo)",
+        "    if IsValid(self.EmberWeapon) then self.EmberWeapon:Remove() end",
+        '    hook.Run("OnNPCKilled", self, damageInfo:GetAttacker(), damageInfo:GetInflictor())',
+        "    self:BecomeRagdoll(damageInfo)",
+        "end",
+        "",
+        "function ENT:BodyUpdate()",
+        "    local activity = self:GetActivity()",
+        "    if activity == ACT_HL2MP_WALK or activity == ACT_HL2MP_RUN then",
+        "        self:BodyMoveXY()",
+        "        return",
+        "    end",
+        "    self:FrameAdvance()",
+        "end",
+        "",
+        "function ENT:EmberMuzzle()",
+        '    local bone = self:LookupBone("ValveBiped.Bip01_R_Hand")',
+        "    if bone then",
+        "        local matrix = self:GetBoneMatrix(bone)",
+        "        if matrix then return matrix:GetTranslation() end",
+        "    end",
+        "    return self:WorldSpaceCenter() + Vector(0, 0, 14)",
+        "end",
+        "",
+        "function ENT:EmberFindTarget()",
+        "    if not self.EmberHostile then return nil end",
+        "    local best, bestDistance = nil, 2500",
+        "    for _, target in ipairs(player.GetAll()) do",
+        "        if IsValid(target) and target:Alive() then",
+        "            local distance = self:GetRangeTo(target)",
+        "            if distance < bestDistance then best, bestDistance = target, distance end",
+        "        end",
+        "    end",
+        "    return best",
+        "end",
+        "",
+        "function ENT:EmberMeleeStrike(target)",
+        "    if CurTime() < (self.EmberNextAttack or 0) then return end",
+        "    self.EmberNextAttack = CurTime() + self.EmberAttackInterval",
+        "    self.loco:FaceTowards(target:GetPos())",
+        "    local damage = DamageInfo()",
+        "    damage:SetDamage(self.EmberAttackDamage)",
+        "    damage:SetAttacker(self)",
+        "    damage:SetInflictor(self)",
+        "    damage:SetDamageType(DMG_CLUB)",
+        "    damage:SetDamageForce((target:WorldSpaceCenter() - self:WorldSpaceCenter()):GetNormalized() * 4000)",
+        "    target:TakeDamageInfo(damage)",
+        "end",
+        "",
+        "function ENT:EmberShoot(target)",
+        "    if CurTime() < (self.EmberNextAttack or 0) then return end",
+        "    self.EmberNextAttack = CurTime() + self.EmberRangedInterval",
+        "    self.loco:FaceTowards(target:GetPos())",
+        "    local muzzle = self:EmberMuzzle()",
+        "    self:FireBullets({",
+        "        Attacker = self,",
+        "        Src = muzzle,",
+        "        Dir = (target:WorldSpaceCenter() - muzzle):GetNormalized(),",
+        "        Damage = self.EmberRangedDamage,",
+        "        Num = self.EmberRangedPellets,",
+        "        Spread = Vector(self.EmberRangedSpread, self.EmberRangedSpread, 0),",
+        '        TracerName = "Tracer",',
+        "    })",
+        "    if self.EmberRangedSound then self:EmitSound(self.EmberRangedSound) end",
+        "end",
+        "",
+        "function ENT:EmberChase(target)",
+        "    local ranged = self.EmberWeaponModel ~= nil and self.EmberRangedRange > 0",
+        "    local stopRange = ranged and self.EmberRangedRange * 0.8 or self.EmberAttackRange",
+        '    local path = Path("Follow")',
+        "    path:SetMinLookAheadDistance(200)",
+        "    path:SetGoalTolerance(math.max(24, stopRange * 0.5))",
+        "    path:Compute(self, target:GetPos())",
+        '    if not path:IsValid() then return "failed" end',
+        "    self:StartActivity(ACT_HL2MP_RUN)",
+        "    self.loco:SetDesiredSpeed(self.EmberRunSpeed)",
+        "    while path:IsValid() and IsValid(target) and target:Alive() do",
+        "        local distance = self:GetRangeTo(target)",
+        '        if ranged and distance <= self.EmberRangedRange and self:Visible(target) then return "in_range" end',
+        '        if not ranged and distance <= self.EmberAttackRange then return "in_range" end',
+        "        path:Update(self)",
+        '        if self.loco:IsStuck() then self:HandleStuck() return "stuck" end',
+        "        if path:GetAge() > 0.4 then path:Compute(self, target:GetPos()) end",
+        "        coroutine.yield()",
+        "    end",
+        '    return "lost"',
+        "end",
+        "",
+        "function ENT:EmberEngage(target)",
+        "    local ranged = self.EmberWeaponModel ~= nil and self.EmberRangedRange > 0",
+        "    self:StartActivity(ACT_HL2MP_IDLE)",
+        "    while IsValid(target) and target:Alive() do",
+        "        local distance = self:GetRangeTo(target)",
+        "        if ranged then",
+        "            if distance > self.EmberRangedRange or not self:Visible(target) then return end",
+        "            self:EmberShoot(target)",
+        "        else",
+        "            if distance > self.EmberAttackRange + 16 then return end",
+        "            self:EmberMeleeStrike(target)",
+        "        end",
+        "        coroutine.wait(0.05)",
+        "    end",
+        "end",
+        "",
+        "function ENT:EmberWander()",
+        "    self:StartActivity(ACT_HL2MP_WALK)",
+        "    self.loco:SetDesiredSpeed(self.EmberWalkSpeed)",
+        "    local offset = VectorRand() * 350",
+        "    offset.z = 0",
+        "    self:MoveToPos(self:GetPos() + offset, { maxage = 6, repath = 2 })",
+        "    self:StartActivity(ACT_HL2MP_IDLE)",
+        "end",
+        "",
+        "function ENT:RunBehaviour()",
+        "    while true do",
+        "        local target = self:EmberFindTarget()",
+        "        if IsValid(target) then",
+        '            if self:EmberChase(target) == "in_range" then self:EmberEngage(target) end',
+        "        else",
+        "            self:EmberWander()",
+        "            coroutine.wait(math.Rand(0.8, 2.4))",
+        "        end",
+        "        coroutine.yield()",
+        "    end",
+        "end",
+        "",
+        "end",
+    ]
+    (base_dir / "shared.lua").write_text("\n".join(base_lines) + "\n", encoding="utf-8")
+    _entity_boilerplate(base_dir)
+
+    classes: list[str] = []
+    for variant in NPC_VARIANTS:
+        class_name = f"ember_{slug}_npc_{variant['suffix']}"
+        nice_name = display_name + " (" + str(variant["label"]) + ")"
+        variant_dir = lua_root / "entities" / class_name
+        variant_dir.mkdir(parents=True, exist_ok=True)
+        lines = [
+            "AddCSLuaFile()",
+            "",
+            f"ENT.Base = {_lua_string(base_class)}",
+            'ENT.Type = "nextbot"',
+            f"ENT.PrintName = {_lua_string(nice_name)}",
+            'ENT.Category = "Ember Character Builder"',
+            'ENT.Author = "Ember Guided Character Builder"',
+            "ENT.Spawnable = true",
+            "ENT.AdminOnly = false",
+            f"ENT.IconOverride = {_lua_string(icon_material)}",
+            "",
+            f"ENT.EmberHostile = {'true' if variant['hostile'] else 'false'}",
+        ]
+        weapon = variant["weapon"]
+        if weapon:
+            lines.extend([
+                f"ENT.EmberWeaponModel = {_lua_string(weapon['model'])}",
+                f"ENT.EmberRangedDamage = {weapon['damage']}",
+                f"ENT.EmberRangedPellets = {weapon['pellets']}",
+                f"ENT.EmberRangedInterval = {weapon['interval']}",
+                f"ENT.EmberRangedRange = {weapon['range']}",
+                f"ENT.EmberRangedSpread = {weapon['spread']}",
+                f"ENT.EmberRangedSound = {_lua_string(weapon['sound'])}",
+            ])
+        (variant_dir / "shared.lua").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        _entity_boilerplate(variant_dir)
+        classes.append(class_name)
+    return classes
+
+
+def _ensure_prop_runtime_files(
+    addon: Path,
+    slug: str,
+    display_name: str,
+    *,
+    project_id: str = "",
+    build_token: str = "",
+) -> dict[str, Path]:
+    """Generate the spawnmenu registration and runtime validation for a prop.
+
+    A prop needs no player registration, ragdoll entity or bone validation. The
+    runtime check proves the compiled model mounts, its materials resolve, the
+    physics file exists and the spawnmenu category is registered.
+    """
+    lua_root = addon / "lua"
+    autorun_dir = lua_root / "autorun"
+    autorun_dir.mkdir(parents=True, exist_ok=True)
+    model_path = f"models/props/{slug}/{slug}.mdl"
+
+    registration = autorun_dir / f"ember_{slug}.lua"
+    lines = [
+        "if SERVER then AddCSLuaFile() end",
+        "",
+        f"local VERSION = {_lua_string(VERSION)}",
+        f"local ID = {_lua_string(slug)}",
+        f"local DISPLAY = {_lua_string(display_name)}",
+        f"local MODEL = {_lua_string(model_path)}",
+        f"local SPAWNLIST_HOOK = {_lua_string('EmberPropSpawnlist_' + slug)}",
+        f"local RESULT_FILE = {_lua_string('ember_character_builder/runtime_' + slug + '.json')}",
+        f"local PROJECT_ID = {_lua_string(project_id)}",
+        f"local BUILD_TOKEN = {_lua_string(build_token)}",
+        "",
+        "if SERVER then",
+        "    resource.AddFile(MODEL)",
+        f"    resource.AddFile({_lua_string(f'models/props/{slug}/{slug}.vvd')})",
+        f"    resource.AddFile({_lua_string(f'models/props/{slug}/{slug}.dx90.vtx')})",
+        f"    resource.AddFile({_lua_string(f'models/props/{slug}/{slug}.phy')})",
+        f"    local materialFiles = file.Find({_lua_string(f'materials/models/props/{slug}/*')}, 'GAME') or {{}}",
+        "    for _, materialFile in ipairs(materialFiles) do",
+        f"        resource.AddFile({_lua_string(f'materials/models/props/{slug}/')} .. materialFile)",
+        "    end",
+        "end",
+        "",
+        "if CLIENT then",
+        f'    hook.Add("PopulatePropMenu", "EmberPropSpawnlist_{slug}", function()',
+        "        local contents = {",
+        "            { type = 'header', text = DISPLAY },",
+        "            { type = 'model', model = MODEL, wide = 96, tall = 96 },",
+        "        }",
+        f'        spawnmenu.AddPropCategory("ember_character_builder_{slug}", DISPLAY, contents, "icon16/brick.png")',
+        "    end)",
+        "",
+        "    local function collect()",
+        "        local propHooks = (hook.GetTable() or {}).PopulatePropMenu or {}",
+        "        local result = {",
+        "            version = VERSION, project_id = PROJECT_ID, build_token = BUILD_TOKEN,",
+        '            id = ID, display_name = DISPLAY, model = MODEL, asset_type = "prop", checked_at = os.time(),',
+        '            model_file_exists = file.Exists(MODEL, "GAME"),',
+        "            valid_model = util.IsValidModel(MODEL),",
+        "            spawnlist_hook_registered = propHooks[SPAWNLIST_HOOK] ~= nil,",
+        "        }",
+        "        local entity = ClientsideModel(MODEL, RENDERGROUP_OPAQUE)",
+        "        if IsValid(entity) then",
+        "            entity:SetNoDraw(true)",
+        "            result.clientside_model_created = true",
+        "            result.materials = {}",
+        "            result.material_error_count = 0",
+        "            for _, materialName in ipairs(entity:GetMaterials() or {}) do",
+        "                local material = Material(materialName)",
+        "                local materialError = material:IsError()",
+        '                local baseTexture = material:GetTexture("$basetexture")',
+        "                local textureError = baseTexture == nil",
+        "                if baseTexture ~= nil then",
+        "                    local errorTexture = baseTexture.IsErrorTexture ~= nil and baseTexture:IsErrorTexture() or false",
+        "                    local textureName = string.lower(baseTexture:GetName() or '')",
+        "                    textureError = errorTexture or string.find(textureName, 'error', 1, true) ~= nil",
+        "                end",
+        "                if materialError or textureError then result.material_error_count = result.material_error_count + 1 end",
+        "                table.insert(result.materials, { name = materialName, material_error = materialError, texture_error = textureError })",
+        "            end",
+        "            result.materials_valid = #result.materials > 0 and result.material_error_count == 0",
+        "            local info = util.GetModelInfo(MODEL) or {}",
+        "            result.model_info = { mesh_count = info.MeshCount or 0, static_prop = info.StaticProp == true }",
+        "            result.model_info_valid = result.model_info.mesh_count > 0",
+        "            entity:Remove()",
+        "        else",
+        "            result.clientside_model_created = false",
+        "        end",
+        "        result.physics_file_exists = file.Exists(string.Replace(MODEL, '.mdl', '.phy'), 'GAME')",
+        "        result.passed = result.model_file_exists and result.valid_model and result.clientside_model_created",
+        "            and result.materials_valid and result.model_info_valid and result.physics_file_exists",
+        "            and result.spawnlist_hook_registered",
+        "        result.status = result.passed and 'passed' or 'failed'",
+        "        return result",
+        "    end",
+        "",
+        "    local function persist(verbose)",
+        "        local ok, result = pcall(collect)",
+        "        if not ok then",
+        "            result = { version = VERSION, project_id = PROJECT_ID, build_token = BUILD_TOKEN, status = 'validator_error', passed = false, error = tostring(result), checked_at = os.time() }",
+        "        end",
+        '        file.CreateDir("ember_character_builder")',
+        "        file.Write(RESULT_FILE, util.TableToJSON(result, true))",
+        "        if verbose then print('[EMBER] Prop runtime validation for ' .. DISPLAY) PrintTable(result) end",
+        "        return result",
+        "    end",
+        "",
+        "    local function scheduleValidation()",
+        "        timer.Simple(1, function() persist(false) end)",
+        "        timer.Simple(5, function() persist(false) end)",
+        "        timer.Simple(12, function() persist(false) end)",
+        "    end",
+        f'    hook.Add("InitPostEntity", "EmberAutoValidate_{slug}", scheduleValidation)',
+        f'    hook.Add("OnReloaded", "EmberReloadValidate_{slug}", scheduleValidation)',
+        "    timer.Simple(2, function() persist(false) end)",
+        "    timer.Simple(8, function() persist(false) end)",
+        f'    concommand.Add("ember_validate_{slug}", function() persist(true) end)',
+        "end",
+        "",
+        f'print("[EMBER] Loaded prop registration {slug} -> " .. MODEL)',
+    ]
+    registration.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    addon_json = addon / "addon.json"
+    addon_json.write_text(json.dumps({
+        "title": display_name,
+        "type": "model",
+        "tags": ["fun", "build"],
+        "ignore": ["*.blend", "*.smd", "*.qc", "*.qci", "*.tga", "reports/*"],
+    }, indent=2), encoding="utf-8")
+
+    return {
+        "registration": registration,
+        "validation": registration,
+        "addon_json": addon_json,
+    }
+
+
 def ensure_runtime_addon_files(
     addon: Path,
     slug: str,
@@ -52,6 +490,8 @@ def ensure_runtime_addon_files(
     *,
     project_id: str = "",
     build_token: str = "",
+    asset_type: str = "character",
+    generate_npcs: bool = False,
 ) -> dict[str, Path]:
     """Generate one self contained shared autorun and a spawnable ragdoll.
 
@@ -61,6 +501,10 @@ def ensure_runtime_addon_files(
     """
     if not _SLUG_RE.fullmatch(slug):
         raise ValueError("Invalid internal slug for Garry's Mod runtime files.")
+    if asset_type == "prop":
+        return _ensure_prop_runtime_files(
+            addon, slug, display_name, project_id=project_id, build_token=build_token,
+        )
 
     lua_root = addon / "lua"
     autorun_dir = lua_root / "autorun"
@@ -85,6 +529,15 @@ def ensure_runtime_addon_files(
     entity_icon_material = f"entities/{entity_class}.png"
     entity_icon = addon / "materials" / entity_icon_material
     _write_entity_icon(entity_icon)
+
+    if generate_npcs:
+        npc_classes = _write_npc_entities(lua_root, slug, display_name, model_path, entity_icon_material)
+    else:
+        npc_classes = _remove_npc_entities(lua_root, slug)
+    npc_spawn_rows = [
+        f"            {{ type = 'entity', spawnname = {_lua_string(class_name)}, nicename = {_lua_string(display_name + ' (' + str(variant['label']) + ')')}, material = {_lua_string(entity_icon_material)} }},"
+        for class_name, variant in zip(npc_classes, NPC_VARIANTS)
+    ]
 
     registration = autorun_dir / f"ember_{slug}.lua"
     lines = [
@@ -148,9 +601,12 @@ def ensure_runtime_addon_files(
         "            { type = 'header', text = DISPLAY },",
         "            { type = 'model', model = MODEL, wide = 96, tall = 96 },",
         f"            {{ type = 'entity', spawnname = RAGDOLL_CLASS, nicename = DISPLAY .. ' Ragdoll', material = {_lua_string(entity_icon_material)} }},",
+        *npc_spawn_rows,
         "        }",
         f'        spawnmenu.AddPropCategory("ember_character_builder_{slug}", DISPLAY, contents, "icon16/user.png")',
         "    end)",
+        "",
+        "    local NPC_CLASSES = { " + ", ".join(_lua_string(class_name) for class_name in npc_classes) + " }",
         "",
         "    local ACTIVITY_CHECKS = {",
         "        idle = ACT_HL2MP_IDLE, walk = ACT_HL2MP_WALK, run = ACT_HL2MP_RUN,",
@@ -328,6 +784,10 @@ def ensure_runtime_addon_files(
         "        local stored = scripted_ents.GetStored(RAGDOLL_CLASS)",
         "        local propHooks = (hook.GetTable() or {}).PopulatePropMenu or {}",
         "        local selectorModel = options[DISPLAY] or options[ID]",
+        "        local npcRegistered = true",
+        "        for _, npcClass in ipairs(NPC_CLASSES) do",
+        "            if scripted_ents.GetStored(npcClass) == nil then npcRegistered = false end",
+        "        end",
         "        local result = {",
         "            version = VERSION, project_id = PROJECT_ID, build_token = BUILD_TOKEN,",
         "            id = ID, display_name = DISPLAY, model = MODEL, checked_at = os.time(),",
@@ -340,6 +800,8 @@ def ensure_runtime_addon_files(
         "            hands_model = hands.model, hands_model_matches = hands.model == 'models/weapons/c_arms_citizen.mdl',",
         "            ragdoll_entity_registered = stored ~= nil,",
         "            spawnlist_hook_registered = propHooks[SPAWNLIST_HOOK] ~= nil,",
+        "            npc_entities_registered = npcRegistered,",
+        "            npc_class_count = #NPC_CLASSES,",
         "        }",
         "        local ok, err = pcall(inspectModel, result)",
         "        if not ok then result.inspect_error = tostring(err) result.clientside_model_created = false end",
@@ -349,7 +811,7 @@ def ensure_runtime_addon_files(
         "            and result.clientside_model_created and result.sequence_count_valid and result.activities_valid",
         "            and result.required_bones_valid and result.materials_valid and result.model_info_valid",
         "            and result.core_bone_hierarchy_valid and result.render_bounds_valid and result.bone_geometry_valid",
-        "            and result.mesh_contract_valid and result.physics_contract_valid",
+        "            and result.mesh_contract_valid and result.physics_contract_valid and result.npc_entities_registered",
         "        result.status = result.passed and 'passed' or 'failed'",
         "        return result",
         "    end",
@@ -461,7 +923,7 @@ def ensure_runtime_addon_files(
         "ignore": ["*.blend", "*.smd", "*.qc", "*.qci", "*.tga", "reports/*"],
     }, indent=2), encoding="utf-8")
 
-    return {
+    result = {
         "registration": registration,
         "client_registration": client_registration,
         "validation": registration,
@@ -471,3 +933,6 @@ def ensure_runtime_addon_files(
         "addon_json": addon_json,
         "entity_icon": entity_icon,
     }
+    for class_name in npc_classes:
+        result[class_name] = lua_root / "entities" / class_name / "shared.lua"
+    return result

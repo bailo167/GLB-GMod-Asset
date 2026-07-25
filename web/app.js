@@ -1,7 +1,7 @@
 'use strict';
 import { GLBViewer } from './viewer.js';
 
-const REQUIRED_SERVICE_VERSION = '2.2.6';
+const REQUIRED_SERVICE_VERSION = '2.3.0';
 const CENTER_DEPTH = new Set(['head_top','neck_base','shoulder_l','shoulder_r','elbow_l','elbow_r','wrist_l','wrist_r','pelvis','hip_l','hip_r','knee_l','knee_r','ankle_l','ankle_r']);
 const REQUIRED = ['head_top','neck_base','shoulder_l','elbow_l','wrist_l','shoulder_r','elbow_r','wrist_r','pelvis','hip_l','knee_l','ankle_l','toe_l','hip_r','knee_r','ankle_r','toe_r'];
 const OPTIONAL = ['chin','eye_l','eye_r','hand_tip_l','hand_tip_r','heel_l','heel_r'];
@@ -90,8 +90,16 @@ async function inspectSelectedGlb() {
   } catch(error) { $('#inspectionBadge').textContent='FAILED'; $('#inspectionBadge').className='badge bad'; $('#inspectionMessage').textContent=error.message; throw error; }
 }
 
+function isPropProject() { return state.project?.options?.asset_type==='prop'; }
 function projectOptions() {
-  return { display_name:$('#displayName').value, slug:slugify($('#slug').value||$('#displayName').value), animation_base:$('#animationBase').value, front_axis:$('#frontAxis').value, target_height:Number($('#targetHeight').value), quality:$('#quality').value, texture_size:Number($('#textureSize').value), compile_model:true, package_gma:$('#packageGma').checked, generate_hands:false };
+  return { display_name:$('#displayName').value, slug:slugify($('#slug').value||$('#displayName').value), asset_type:$('#assetType').value, animation_base:$('#animationBase').value, front_axis:$('#frontAxis').value, target_height:Number($('#targetHeight').value), quality:$('#quality').value, texture_size:Number($('#textureSize').value), compile_model:true, package_gma:$('#packageGma').checked, generate_hands:false, generate_npcs:$('#assetType').value==='character'&&$('#generateNpcs').checked };
+}
+function applyAssetTypeUi() {
+  const prop=$('#assetType').value==='prop';
+  $$('#panel-import .character-only').forEach(node=>node.classList.toggle('hidden',prop));
+  $('#targetHeightLabel').textContent=prop?'Source size, inches, largest dimension':'Source height, inches';
+  if(prop&&$('#displayName').value==='Guided Character'){ $('#displayName').value='Scanned Prop'; $('#slug').value=slugify('Scanned Prop'); }
+  if(!prop&&$('#displayName').value==='Scanned Prop'){ $('#displayName').value='Guided Character'; $('#slug').value=slugify('Guided Character'); }
 }
 
 async function createProject() {
@@ -100,7 +108,9 @@ async function createProject() {
   try {
     const options=projectOptions(); $('#slug').value=options.slug;
     const form=new FormData(); form.append('glb',state.file,state.file.name); form.append('options',JSON.stringify(options));
-    const project=await api('/api/projects',{method:'POST',body:form}); await openProject(project.id); showPanel('guide'); toast('Guided project created','Assign the landmarks, review the skeleton and lock the guide.');
+    const project=await api('/api/projects',{method:'POST',body:form}); await openProject(project.id);
+    if(project.options.asset_type==='prop'){ showPanel('build'); toast('Prop project created','No rig guide is needed. Select Build + Install when ready.'); }
+    else { showPanel('guide'); toast('Guided project created','Assign the landmarks, review the skeleton and lock the guide.'); }
   } catch(error) { toast('Project creation failed',error.message); }
   finally { $('#createProjectBtn').disabled=false; $('#createProjectBtn').textContent='Create Guided Project'; }
 }
@@ -116,13 +126,15 @@ async function openProject(id) {
   try {
     const project=await api(`/api/projects/${id}`); state.project=project; state.guide=project.guide||{landmarks:{},rigid_zones:[],locked:false,version:2}; state.selected=null; state.reviewIndex=null; updateReviewUi();
     $('#activeProjectStatus').textContent=project.options.display_name; $('#activeProjectStatus').className='status ok';
-    $('#guideSubtitle').textContent=`${project.options.display_name} · ${project.options.target_height} inches · ${project.options.animation_base} animation base`;
+    $('#guideSubtitle').textContent=project.options.asset_type==='prop'
+      ?`${project.options.display_name} · static prop · ${project.options.target_height} inches · no rig guide needed`
+      :`${project.options.display_name} · ${project.options.target_height} inches · ${project.options.animation_base} animation base`;
     await initViewer(); $('#viewportEmpty').classList.remove('hidden');
     const source=await api(`/api/projects/${id}/source`);
     await state.viewer.load(source,{frontAxis:project.options.front_axis,targetHeight:project.options.target_height});
     state.viewer.setLandmarks(state.guide.landmarks||{}); $('#viewportEmpty').classList.add('hidden');
     renderLandmarks(); renderGuideValidation(project.guide_validation); renderRigidZones(); updateGuideState(); populateBuildSettings();
-    refreshFiles(); refreshReport(); showPanel(project.guide?.locked?'build':'guide');
+    refreshFiles(); refreshReport(); showPanel(isPropProject()||project.guide?.locked?'build':'guide');
   } catch(error) {
     const empty=$('#viewportEmpty');
     if(empty){ empty.classList.remove('hidden'); empty.innerHTML=`<b>3D VIEWPORT UNAVAILABLE</b><span>${escapeHtml(error.message)}</span>`; }
@@ -188,12 +200,14 @@ function renderGuideValidation(validation) {
 }
 
 function updateGuideState() {
-  const locked=Boolean(state.guide.locked); $('#guideStateBadge').textContent=locked?'LOCKED':'UNLOCKED'; $('#guideStateBadge').className=`badge ${locked?'ok':'warn'}`;
-  $('#lockGuideBtn').textContent=locked?'Guide Locked':'Validate and Lock'; $('#runBuildBtn').disabled=!state.project||!locked;
+  const prop=isPropProject();
+  const locked=Boolean(state.guide.locked); $('#guideStateBadge').textContent=prop?'NOT NEEDED':locked?'LOCKED':'UNLOCKED'; $('#guideStateBadge').className=`badge ${prop||locked?'ok':'warn'}`;
+  $('#lockGuideBtn').textContent=locked?'Guide Locked':'Validate and Lock'; $('#runBuildBtn').disabled=!state.project||(!prop&&!locked);
 }
 
 async function saveGuide(lock=false) {
   if(!state.project) return toast('No active project','Create or open a project first.');
+  if(isPropProject()) return toast('No guide for props','Prop projects skip the rig guide. Use Build + Install directly.');
   const payload={...state.guide,locked:lock};
   try { const project=await api(`/api/projects/${state.project.id}/guide`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}); state.project=project; state.guide=project.guide; state.viewer.setLandmarks(state.guide.landmarks); renderLandmarks(); renderGuideValidation(project.guide_validation); renderRigidZones(); updateGuideState(); toast(lock&&state.guide.locked?'Guide locked':'Guide saved',lock&&!state.guide.locked?'Fix the validation errors before building.':'Landmarks remain in the project workspace.'); if(lock&&state.guide.locked)showPanel('build'); }
   catch(error){toast('Guide save failed',error.message);}
@@ -213,7 +227,8 @@ function renderRigidZones() {
 function addRigidZone() { const point=state.selected&&state.guide.landmarks?.[state.selected]; if(!point)return toast('Select an assigned point','A rigid zone needs a centre on the model.'); const bone=$('#rigidBone').value,radius=Number($('#rigidRadius').value); state.guide.rigid_zones||=[]; state.guide.rigid_zones.push({id:crypto.randomUUID().slice(0,8),center:[...point],radius,bone,label:`${titleCase(state.selected)} accessory`}); state.guide.locked=false; renderRigidZones(); updateGuideState(); }
 
 async function runBuild() {
-  if(!state.project||!state.guide.locked)return toast('Guide is not locked','Complete and lock the landmark guide first.');
+  if(!state.project)return toast('No active project','Create or open a project first.');
+  if(!isPropProject()&&!state.guide.locked)return toast('Guide is not locked','Complete and lock the landmark guide first.');
   try { const job=await api(`/api/projects/${state.project.id}/build`,{method:'POST'}); $('#buildLog').textContent='Build queued.\n'; $('#buildState').textContent='QUEUED'; $('#buildProgress').style.width='0%'; clearInterval(state.jobTimer); state.jobTimer=setInterval(()=>pollJob(job.id),800); await pollJob(job.id); }
   catch(error){toast('Build did not start',error.message);}
 }
@@ -240,15 +255,20 @@ function populateBuildSettings() {
   $('#optQuality').value=options.quality;
   $('#optTextureSize').value=String(options.texture_size);
   $('#optTargetHeight').value=String(options.target_height);
+  $('#optGenerateNpcs').checked=Boolean(options.generate_npcs);
+  $('#optNpcRow').classList.toggle('hidden',options.asset_type==='prop');
+  $('#optTargetHeightLabel').textContent=options.asset_type==='prop'?'Source size, inches, largest dimension':'Source height, inches';
 }
 async function saveBuildSettings() {
   if(!state.project)return;
-  const payload={quality:$('#optQuality').value,texture_size:Number($('#optTextureSize').value),target_height:Number($('#optTargetHeight').value)};
+  const payload={quality:$('#optQuality').value,texture_size:Number($('#optTextureSize').value),target_height:Number($('#optTargetHeight').value),generate_npcs:$('#optGenerateNpcs').checked};
   try {
     const project=await api(`/api/projects/${state.project.id}/options`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
     state.project=project; populateBuildSettings();
-    $('#guideSubtitle').textContent=`${project.options.display_name} · ${project.options.target_height} inches · ${project.options.animation_base} animation base`;
-    toast('Build settings saved',`${project.options.quality} quality, ${project.options.texture_size} texture, ${project.options.target_height} inches. They apply on the next Build + Install.`);
+    $('#guideSubtitle').textContent=project.options.asset_type==='prop'
+      ?`${project.options.display_name} · static prop · ${project.options.target_height} inches · no rig guide needed`
+      :`${project.options.display_name} · ${project.options.target_height} inches · ${project.options.animation_base} animation base`;
+    toast('Build settings saved',`${project.options.quality} quality, ${project.options.texture_size} texture, ${project.options.target_height} inches${project.options.generate_npcs?', NPC variants on':''}. They apply on the next Build + Install.`);
   } catch(error){ toast('Settings not saved',error.message); }
 }
 async function refreshReport() { if(!state.project)return; try { const report=await api(`/api/projects/${state.project.id}/report`),checks=report.post_build||report.checks||{}; const rows=flattenChecks(checks).filter(([,v])=>typeof v==='boolean'||typeof v==='number'||Array.isArray(v)); $('#buildValidation').innerHTML=rows.length?rows.map(([name,value])=>{const ok=checkRowState(name,value);return`<div class="check-row ${ok?'':'bad'}"><i></i><span><b>${escapeHtml(name.replaceAll('_',' '))}</b><br>${escapeHtml(Array.isArray(value)?JSON.stringify(value):String(value))}</span></div>`}).join(''):'<div class="notice">No strict validation report yet.</div>'; updatePipeline(report.status,checks); refreshTextureProof(checks); }
@@ -305,7 +325,7 @@ async function readRuntimeCheck() { if(!state.project)return; try { const result
 function renderRuntime(result) { const passed=result.status==='passed'||result.passed===true; $('#runtimeBadge').textContent=String(result.status||'unknown').toUpperCase(); $('#runtimeBadge').className=`badge ${passed?'ok':result.status==='not_run'?'warn':'bad'}`; const ignored=new Set(['materials','bones','activities','path']); const rows=Object.entries(result).filter(([key,value])=>!ignored.has(key)&&(typeof value==='boolean'||typeof value==='number'||typeof value==='string')).map(([key,value])=>({name:key,value,ok:typeof value==='boolean'?value:key==='material_error_count'?value===0:key==='sequence_count'?value>8:true})); for(const [section,data] of [['Activities',result.activities],['Bones',result.bones]])if(data)for(const [key,value]of Object.entries(data))rows.push({name:`${section}: ${key}`,value:typeof value==='object'?value.valid:value,ok:typeof value==='object'?value.valid:Boolean(value)}); $('#runtimeResult').innerHTML=rows.length?rows.map(row=>`<div class="check-row ${row.ok?'':'bad'}"><i></i><span><b>${escapeHtml(row.name.replaceAll('_',' '))}</b><br>${escapeHtml(typeof row.value==='object'?JSON.stringify(row.value):String(row.value))}</span></div>`).join(''):'<div class="notice">The runtime check has not been written yet. Restart Garry\'s Mod and enter Sandbox.</div>'; }
 function downloadOutput() { if(state.project)location.href=`/api/projects/${state.project.id}/download`; }
 
-async function loadProjects() { try { const data=await api('/api/projects'); $('#projectList').innerHTML=data.projects.length?data.projects.map(project=>`<article class="card project-card"><div class="card-head"><h2>${escapeHtml(project.options.display_name)}</h2><span class="badge ${project.state==='complete'?'ok':project.state.includes('failed')?'bad':'warn'}">${escapeHtml(project.state)}</span></div><p>${escapeHtml(project.options.slug)} · ${new Date(project.updated*1000).toLocaleString()}</p><div class="project-meta"><span class="status">${Number(project.inspection?.triangles||0).toLocaleString()} triangles</span><span class="status">${project.guide_validation?.assigned_required||0}/${project.guide_validation?.required_count||17} landmarks</span></div><div class="actions"><button class="btn primary" data-open-project="${project.id}">Open</button><button class="btn danger" data-delete-project="${project.id}">Delete</button></div></article>`).join(''):'<div class="notice">No projects yet.</div>'; $$('[data-open-project]').forEach(button=>button.addEventListener('click',()=>openProject(button.dataset.openProject))); $$('[data-delete-project]').forEach(button=>button.addEventListener('click',async()=>{if(confirm('Delete this entire project workspace?')){await api(`/api/projects/${button.dataset.deleteProject}`,{method:'DELETE'});loadProjects();}})); }
+async function loadProjects() { try { const data=await api('/api/projects'); $('#projectList').innerHTML=data.projects.length?data.projects.map(project=>`<article class="card project-card"><div class="card-head"><h2>${escapeHtml(project.options.display_name)}</h2><span class="badge ${project.state==='complete'?'ok':project.state.includes('failed')?'bad':'warn'}">${escapeHtml(project.state)}</span></div><p>${escapeHtml(project.options.slug)} · ${project.options.asset_type==='prop'?'prop':'character'} · ${new Date(project.updated*1000).toLocaleString()}</p><div class="project-meta"><span class="status">${Number(project.inspection?.triangles||0).toLocaleString()} triangles</span><span class="status">${project.guide_validation?.assigned_required||0}/${project.guide_validation?.required_count||17} landmarks</span></div><div class="actions"><button class="btn primary" data-open-project="${project.id}">Open</button><button class="btn danger" data-delete-project="${project.id}">Delete</button></div></article>`).join(''):'<div class="notice">No projects yet.</div>'; $$('[data-open-project]').forEach(button=>button.addEventListener('click',()=>openProject(button.dataset.openProject))); $$('[data-delete-project]').forEach(button=>button.addEventListener('click',async()=>{if(confirm('Delete this entire project workspace?')){await api(`/api/projects/${button.dataset.deleteProject}`,{method:'DELETE'});loadProjects();}})); }
   catch(error){$('#projectList').innerHTML=`<div class="notice">${escapeHtml(error.message)}</div>`;}
 }
 
@@ -319,7 +339,7 @@ function bind() {
   $$('.nav-item').forEach(button=>button.addEventListener('click',()=>showPanel(button.dataset.panel))); $$('[data-go]').forEach(button=>button.addEventListener('click',()=>showPanel(button.dataset.go)));
   $('#selectGlbBtn').addEventListener('click',()=>{$('#glbInput').value='';$('#glbInput').click();}); $('#glbInput').addEventListener('change',event=>selectFile(event.target.files[0]));
   const drop=$('#dropZone'); ['dragenter','dragover'].forEach(name=>drop.addEventListener(name,event=>{event.preventDefault();drop.classList.add('drag');})); ['dragleave','drop'].forEach(name=>drop.addEventListener(name,event=>{event.preventDefault();drop.classList.remove('drag');})); drop.addEventListener('drop',event=>selectFile(event.dataTransfer.files[0]));
-  $('#displayName').addEventListener('input',()=>{$('#slug').value=slugify($('#displayName').value);}); $('#inspectBtn').addEventListener('click',inspectSelectedGlb); $('#createProjectBtn').addEventListener('click',createProject);
+  $('#displayName').addEventListener('input',()=>{$('#slug').value=slugify($('#displayName').value);}); $('#assetType').addEventListener('change',applyAssetTypeUi); $('#inspectBtn').addEventListener('click',inspectSelectedGlb); $('#createProjectBtn').addEventListener('click',createProject);
   $('#reviewPointsBtn').addEventListener('click',startGuidedReview);
   $('#autoSeedBtn').addEventListener('click',()=>{if(!state.viewer||!state.project)return;state.guide.landmarks=state.viewer.autoSeed();state.guide.locked=false;renderLandmarks();updateGuideState();localGuideValidation();toast('Landmarks seeded','Review every marker and click the exact joint positions before locking.');});
   $('#clearGuideBtn').addEventListener('click',clearGuide); $('#saveGuideBtn').addEventListener('click',()=>saveGuide(false)); $('#lockGuideBtn').addEventListener('click',()=>saveGuide(true));
@@ -328,4 +348,4 @@ function bind() {
   $('#saveToolchainBtn').addEventListener('click',saveToolchain); $('#refreshToolchainBtn').addEventListener('click',loadToolchain);
 }
 
-bind(); renderLandmarks(); localGuideValidation(); updateGuideState(); updateReviewUi(); health(); loadProjects();
+bind(); applyAssetTypeUi(); renderLandmarks(); localGuideValidation(); updateGuideState(); updateReviewUi(); health(); loadProjects();

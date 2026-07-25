@@ -57,7 +57,7 @@ def test_http_glb_inspection_and_project_creation(tmp_path: Path, monkeypatch):
     try:
         status, health = request_json(base + "/api/health")
         assert status == 200
-        assert health["version"] == "2.2.6"
+        assert health["version"] == "2.3.0"
 
         inspect_body, inspect_type = multipart({}, {"glb": ("sample.glb", glb_bytes(), "model/gltf-binary")})
         status, inspection = request_json(base + "/api/inspect", inspect_body, inspect_type)
@@ -93,7 +93,7 @@ def test_http_glb_inspection_and_project_creation(tmp_path: Path, monkeypatch):
         result_dir.mkdir(parents=True)
         result_file = result_dir / "runtime_http_import.json"
         result_file.write_text(json.dumps({
-            "version": "2.2.6",
+            "version": "2.3.0",
             "project_id": project["id"],
             "build_token": "wrongtoken",
             "passed": True,
@@ -103,7 +103,7 @@ def test_http_glb_inspection_and_project_creation(tmp_path: Path, monkeypatch):
         assert runtime["status"] == "stale"
         assert runtime["project_state"] != "complete"
         result_file.write_text(json.dumps({
-            "version": "2.2.6",
+            "version": "2.3.0",
             "project_id": project["id"],
             "build_token": "buildtoken01",
             "status": "passed",
@@ -127,6 +127,7 @@ def test_http_glb_inspection_and_project_creation(tmp_path: Path, monkeypatch):
             "bone_geometry_valid": True,
             "mesh_contract_valid": True,
             "physics_contract_valid": True,
+            "npc_entities_registered": True,
             "registration_error_count": 0,
         }), encoding="utf-8")
         status, runtime = request_json(base + f"/api/projects/{project['id']}/runtime-check")

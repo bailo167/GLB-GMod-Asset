@@ -293,6 +293,94 @@ def robust_edge_deformation(
     }
 
 
+def repair_localized_edge_outliers(
+    rest: Sequence[Vec3],
+    warped: Sequence[Vec3],
+    edges: Sequence[tuple[int, int]],
+    height: float,
+    max_outlier_fraction: float = 0.01,
+    iterations: int = 12,
+) -> dict:
+    """Repair a warp whose only defect is a small set of localized edge outliers.
+
+    The per-bone bind warp assigns each vertex the blend of its own influences.
+    At an anatomical region boundary two adjacent vertices can receive different
+    influence sets, and on the wrong mesh that stretches the shared edge far
+    beyond its rest length while every surrounding edge stays clean. The Bailey 2
+    build measured 131 severe edges out of 35,998 sampled - 0.36%, all localized -
+    and was rejected outright even though 99.6% of the surface warped cleanly.
+
+    Rejecting that build helps nobody: the no-warp path is unavailable precisely
+    because the model needs the warp. Instead, the displacement of each offending
+    vertex is replaced by the average displacement of its neighbours, iterated
+    until the field is locally smooth. The repair is only attempted when the
+    severe edges are genuinely rare; a widespread explosion keeps failing.
+    """
+    h = max(float(height), 1.0)
+    meaningful_length = max(h * 0.00025, 0.01)
+    absolute_outlier_change = max(h * 0.006, 0.12)
+
+    meaningful_edges = 0
+    bad_vertices: set[int] = set()
+    severe_edges = 0
+    for first, second in edges:
+        old = length(sub(rest[second], rest[first]))
+        if old < meaningful_length or old <= 1.0e-8:
+            continue
+        meaningful_edges += 1
+        new = length(sub(warped[second], warped[first]))
+        ratio = new / old
+        if (ratio < 0.08 or ratio > 5.0) and abs(new - old) > absolute_outlier_change:
+            severe_edges += 1
+            bad_vertices.add(int(first))
+            bad_vertices.add(int(second))
+
+    if severe_edges == 0:
+        return {"attempted": False, "reason": "no_outliers", "severe_edges": 0, "outlier_vertices": 0, "repaired": None}
+    fraction = severe_edges / max(meaningful_edges, 1)
+    if fraction > max_outlier_fraction:
+        return {
+            "attempted": False,
+            "reason": "outliers_not_localized",
+            "severe_edges": severe_edges,
+            "outlier_vertices": len(bad_vertices),
+            "severe_edge_fraction": fraction,
+            "repaired": None,
+        }
+
+    adjacency: dict[int, set[int]] = {}
+    for first, second in edges:
+        adjacency.setdefault(int(first), set()).add(int(second))
+        adjacency.setdefault(int(second), set()).add(int(first))
+
+    # Clean neighbours anchor the field: averaging a bad vertex only from other
+    # bad vertices lets the spike bounce back and forth between them, so good
+    # neighbours are preferred and every correction is applied immediately.
+    displacement: list[Vec3] = [sub(warped[index], rest[index]) for index in range(len(rest))]
+    for _iteration in range(max(1, int(iterations))):
+        for index in sorted(bad_vertices):
+            neighbours = adjacency.get(index, ())
+            if not neighbours:
+                continue
+            good = [neighbour for neighbour in neighbours if neighbour not in bad_vertices]
+            source_set = good or sorted(neighbours)
+            total = (0.0, 0.0, 0.0)
+            for neighbour in source_set:
+                total = add(total, displacement[neighbour])
+            displacement[index] = scale(total, 1.0 / len(source_set))
+
+    repaired = [add(rest[index], displacement[index]) for index in range(len(rest))]
+    return {
+        "attempted": True,
+        "reason": "localized",
+        "severe_edges": severe_edges,
+        "outlier_vertices": len(bad_vertices),
+        "severe_edge_fraction": fraction,
+        "iterations": max(1, int(iterations)),
+        "repaired": repaired,
+    }
+
+
 def rescale_guide_landmarks(
     landmarks: dict,
     rigid_zones: list,

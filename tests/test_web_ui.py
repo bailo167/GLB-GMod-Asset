@@ -15,7 +15,7 @@ def test_web_ui_contains_guided_workbench_and_strict_build_contract():
     assert "Repair Installation" in html
     assert 'id="runtimeCheckBtn"' in html
     assert 'Build + Install' in html
-    assert "REQUIRED_SERVICE_VERSION = '2.2.6'" in app
+    assert "REQUIRED_SERVICE_VERSION = '2.3.0'" in app
     assert "validateGlbHeader" in app
     assert "inspectSelectedGlb" in app
     assert "CENTER_DEPTH" in app
@@ -33,6 +33,12 @@ def test_web_ui_contains_guided_workbench_and_strict_build_contract():
     assert 'id="optTargetHeight"' in html
     assert "saveBuildSettings" in app
     assert "/options" in app
+    assert 'id="assetType"' in html
+    assert 'id="generateNpcs"' in html
+    assert 'id="optGenerateNpcs"' in html
+    assert "applyAssetTypeUi" in app
+    assert "isPropProject" in app
+    assert "asset_type:$('#assetType').value" in app
     assert "class GLBViewer" in viewer
     assert "raycast" in viewer
     assert "autoSeed" in viewer

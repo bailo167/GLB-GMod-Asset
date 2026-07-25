@@ -161,12 +161,15 @@ class JobManager:
         record = self.store.load(job.project_id)
         root = self.store.project_dir(job.project_id)
         config = self.config_provider()
+        is_prop = record.options.asset_type == "prop"
+        category = "props" if is_prop else "player"
         self._set(job_id, state="running", started=time.time(), phase="Preparing guided build", progress=3)
-        self._log(job_id, f"Guided build started for {record.options.display_name}.")
+        self._log(job_id, f"{'Prop' if is_prop else 'Guided'} build started for {record.options.display_name}.")
         try:
-            validation = record.to_dict()["guide_validation"]
-            if not record.guide.get("locked") or validation.get("errors"):
-                raise RuntimeError("The landmark guide is not locked and valid.")
+            if not is_prop:
+                validation = record.to_dict()["guide_validation"]
+                if not record.guide.get("locked") or validation.get("errors"):
+                    raise RuntimeError("The landmark guide is not locked and valid.")
 
             for name in ("build", "generated", "addon", "reports"):
                 path = root / name
@@ -193,7 +196,7 @@ class JobManager:
                 terminal_state, terminal_phase = "blocked", "Blender required"
                 textures_compiled = compiled = False
             else:
-                self._set(job_id, phase="Generating guided ValveBiped source", progress=10)
+                self._set(job_id, phase="Generating static prop source" if is_prop else "Generating guided ValveBiped source", progress=10)
                 command = [
                     config.blender,
                     "--background",
@@ -210,15 +213,15 @@ class JobManager:
                     raise RuntimeError(f"Blender guided pipeline exited with code {code}.")
 
                 self._set(job_id, phase="Writing deterministic Source VTF textures", progress=64)
-                textures_compiled = self._compile_textures(job_id, root, config, record.options.slug)
+                textures_compiled = self._compile_textures(job_id, root, config, record.options.slug, category)
                 if not textures_compiled:
                     terminal_state, terminal_phase = "texture_blocked", "Internal VTF generation failed"
                     compiled = False
                 else:
-                    self._set(job_id, phase="Compiling Source player model", progress=76)
+                    self._set(job_id, phase="Compiling Source prop model" if is_prop else "Compiling Source player model", progress=76)
                     compiled = False
                     if record.options.compile_model:
-                        compiled = self._compile_source(job_id, root, config)
+                        compiled = self._compile_source(job_id, root, config, category)
                     if record.options.compile_model and not compiled:
                         terminal_state, terminal_phase = "compile_blocked", "StudioMDL required or failed"
                     else:
@@ -245,6 +248,8 @@ class JobManager:
                             display_name=record.options.display_name,
                             project_id=record.id,
                             build_token=job_id,
+                            asset_type=record.options.asset_type,
+                            generate_npcs=record.options.generate_npcs,
                         )
                         terminal_state = "installed_unverified"
                         terminal_phase = "Built and installed, restart Garry's Mod for automatic runtime proof"
@@ -325,21 +330,21 @@ class JobManager:
         origin = "top" if descriptor & 0x20 else "bottom"
         return True, f"{width}x{height}, {depth} bit, uncompressed, {origin} origin"
 
-    def _compile_textures(self, job_id: str, root: Path, config: ToolchainConfig, slug: str) -> bool:
-        source_dir = root / "generated" / "materialsrc" / "models" / "player" / slug
+    def _compile_textures(self, job_id: str, root: Path, config: ToolchainConfig, slug: str, category: str = "player") -> bool:
+        source_dir = root / "generated" / "materialsrc" / "models" / category / slug
         tga_files = sorted(source_dir.glob("*.tga")) if source_dir.is_dir() else []
         if not tga_files:
             self._log(job_id, "No TGA source textures were generated.")
             return False
 
-        addon_output = root / "addon" / "materials" / "models" / "player" / slug
+        addon_output = root / "addon" / "materials" / "models" / category / slug
         addon_output.mkdir(parents=True, exist_ok=True)
         for stale in addon_output.glob("*.vtf"):
             stale.unlink(missing_ok=True)
 
         game_output: Path | None = None
         if config.game_dir and (Path(config.game_dir) / "gameinfo.txt").is_file():
-            game_output = Path(config.game_dir) / "materials" / "models" / "player" / slug
+            game_output = Path(config.game_dir) / "materials" / "models" / category / slug
             game_output.mkdir(parents=True, exist_ok=True)
 
         for source in source_dir.glob("*.vmt"):
@@ -391,7 +396,7 @@ class JobManager:
         self._log(job_id, f"Internal VTF writer produced {len(actual_names)} validated VTF files.")
         return all_valid and actual_names == expected_names
 
-    def _compile_source(self, job_id: str, root: Path, config: ToolchainConfig) -> bool:
+    def _compile_source(self, job_id: str, root: Path, config: ToolchainConfig, category: str = "player") -> bool:
         qc_files = list((root / "generated" / "modelsrc").glob("*.qc"))
         if not qc_files:
             self._log(job_id, "No QC file was generated.")
@@ -405,8 +410,8 @@ class JobManager:
 
         qc = qc_files[0]
         slug = qc.stem
-        compiled_source = Path(config.game_dir) / "models" / "player" / slug
-        addon_models = root / "addon" / "models" / "player" / slug
+        compiled_source = Path(config.game_dir) / "models" / category / slug
+        addon_models = root / "addon" / "models" / category / slug
         # Remove every previous compiler output before invoking StudioMDL. Without
         # this, an old valid file can make a failed rebuild look successful.
         for directory in (compiled_source, addon_models):
@@ -472,6 +477,8 @@ class JobManager:
         addon = root / "addon"
         modelsrc = root / "generated" / "modelsrc"
         slug = record.options.slug
+        asset_type = record.options.asset_type
+        category = "props" if asset_type == "prop" else "player"
         if addon.exists():
             ensure_runtime_addon_files(
                 addon,
@@ -479,13 +486,15 @@ class JobManager:
                 record.options.display_name,
                 project_id=record.id,
                 build_token=job_id,
+                asset_type=asset_type,
+                generate_npcs=record.options.generate_npcs,
             )
 
-        model_dir = addon / "models" / "player" / slug
+        model_dir = addon / "models" / category / slug
         expected_model_files = [model_dir / f"{slug}{extension}" for extension in (".mdl", ".vvd", ".dx90.vtx", ".phy")]
         compiled_files = [str(path.relative_to(root)).replace("\\", "/") for path in expected_model_files if path.is_file()]
 
-        material_dir = addon / "materials" / "models" / "player" / slug
+        material_dir = addon / "materials" / "models" / category / slug
         vmt_files = sorted(material_dir.glob("*.vmt")) if material_dir.is_dir() else []
         vtf_files = sorted(material_dir.glob("*.vtf")) if material_dir.is_dir() else []
         valid_vtf = {path.stem for path in vtf_files if self._valid_vtf(path)}
@@ -495,6 +504,14 @@ class JobManager:
             for match in re.finditer(r'\$(?:basetexture|bumpmap)"?\s+"[^"]*/([^/"]+)"', text, flags=re.IGNORECASE):
                 required_vtf.add(match.group(1))
         missing_vtf = sorted(required_vtf - valid_vtf)
+
+        if asset_type == "prop":
+            self._write_prop_validation(
+                job_id, root, record, report, reports, report_path,
+                terminal_state, compiled, textures_compiled, install_result,
+                compiled_files, vmt_files, vtf_files, valid_vtf, missing_vtf,
+            )
+            return
 
         qc = modelsrc / f"{slug}.qc"
         qc_text = qc.read_text(encoding="utf-8", errors="replace") if qc.is_file() else ""
@@ -615,3 +632,117 @@ class JobManager:
         ])
         (reports / "FINAL_VALIDATION.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
         self._log(job_id, "Strict post build validation report written.")
+
+    def _write_prop_validation(
+        self,
+        job_id: str,
+        root: Path,
+        record,
+        report: dict[str, Any],
+        reports: Path,
+        report_path: Path,
+        terminal_state: str,
+        compiled: bool,
+        textures_compiled: bool,
+        install_result: dict[str, Any] | None,
+        compiled_files: list[str],
+        vmt_files: list[Path],
+        vtf_files: list[Path],
+        valid_vtf: set[str],
+        missing_vtf: list[str],
+    ) -> None:
+        """Write the strict validation report for a static prop build.
+
+        A prop has no skeleton, guide, animation library, ragdoll or player
+        registration, so its contract is the texture pipeline, the static prop
+        QC, the compiled binaries and the spawnmenu registration.
+        """
+        addon = root / "addon"
+        modelsrc = root / "generated" / "modelsrc"
+        slug = record.options.slug
+        qc = modelsrc / f"{slug}.qc"
+        qc_text = qc.read_text(encoding="utf-8", errors="replace") if qc.is_file() else ""
+        registration = addon / "lua" / "autorun" / f"ember_{slug}.lua"
+        registration_text = registration.read_text(encoding="utf-8", errors="replace") if registration.is_file() else ""
+        source_checks = report.get("checks") if isinstance(report.get("checks"), dict) else {}
+        texture_bake = report.get("texture_bake") if isinstance(report.get("texture_bake"), dict) else {}
+        bake_checks = texture_bake.get("checks") if isinstance(texture_bake.get("checks"), dict) else {}
+        proofs = texture_bake.get("material_proofs") if isinstance(texture_bake.get("material_proofs"), dict) else {}
+        generated_dir = root / "generated"
+        rendered_proofs = sorted(
+            name for name in (proofs.get("front"), proofs.get("back"))
+            if name and (generated_dir / str(name)).is_file()
+        )
+        unsafe_material_tokens: list[str] = []
+        for vmt in vmt_files:
+            lower = vmt.read_text(encoding="utf-8", errors="replace").lower()
+            for token in ("$phong", "$bumpmap", "$envmap"):
+                if token in lower:
+                    unsafe_material_tokens.append(f"{vmt.name}:{token}")
+
+        checks = {
+            "terminal_state": terminal_state,
+            "asset_type": "prop",
+            "blender_source_created": (generated_dir / f"{slug}_source.blend").is_file(),
+            "reference_smd_created": (modelsrc / f"{slug}_reference.smd").is_file(),
+            "physics_smd_created": (modelsrc / f"{slug}_physics.smd").is_file(),
+            "static_prop_qc": "$staticprop" in qc_text,
+            "collision_model_declared": "$collisionmodel" in qc_text,
+            "uv_atlas_rebuilt_on_reduced_mesh": bool(source_checks.get("uv_atlas_rebuilt_on_reduced_mesh")),
+            "original_uv_map_discarded": bool(source_checks.get("original_uv_map_discarded")),
+            "texture_baked_from_high_resolution": bool(source_checks.get("texture_baked_from_high_resolution")),
+            "uv_coordinates_finite": bool(bake_checks.get("uv_coordinates_finite")),
+            "uv_inside_atlas": bool(bake_checks.get("uv_inside_atlas")),
+            "atlas_islands_do_not_overlap": bool(bake_checks.get("islands_do_not_overlap")),
+            "every_triangle_has_bake_coverage": bool(bake_checks.get("every_triangle_has_bake_coverage")),
+            "atlas_resolution_adequate": bool(bake_checks.get("atlas_resolution_adequate")),
+            "texture_bake_failures": list(texture_bake.get("failures") or []),
+            "bake_has_colour_variation": bool(bake_checks.get("bake_has_colour_variation")),
+            "no_large_unpainted_regions": bool(bake_checks.get("no_large_unpainted_regions")),
+            "baked_material_rendered_in_blender": bool(bake_checks.get("baked_material_rendered_in_blender")),
+            "baked_material_proofs": rendered_proofs,
+            "texture_bake_passed": bool(texture_bake.get("passed")),
+            "vtf_written_and_validated": textures_compiled,
+            "vtex_compiled": textures_compiled,  # retained for V2 UI and report compatibility
+            "valid_vtf_count": len(valid_vtf),
+            "all_vtf_headers_valid": bool(vtf_files) and len(valid_vtf) == len(vtf_files),
+            "material_references_complete": bool(vmt_files) and not missing_vtf,
+            "missing_vtf_references": missing_vtf,
+            "safe_base_only_materials": not unsafe_material_tokens,
+            "unsafe_material_tokens": unsafe_material_tokens,
+            "studiomdl_compiled": compiled,
+            "compiled_files": compiled_files,
+            "prop_registration_created": registration.is_file(),
+            "spawnlist_registration_created": "spawnmenu.AddPropCategory" in registration_text,
+            "auto_install_verified": bool(install_result and install_result.get("installed")),
+            "installed_direct_file_count": int(install_result.get("direct_file_count", 0)) if install_result else 0,
+            "runtime_check_required_for_complete": True,
+            "gma_created": (root / "artifacts" / f"{slug}.gma").is_file(),
+        }
+        report["post_build"] = checks
+        if install_result:
+            report["installation"] = install_result
+        report["status"] = terminal_state
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+
+        lines = [
+            f"# {record.options.display_name} validation",
+            "",
+            f"Current state: `{terminal_state}`",
+            "",
+            "The prop is not Complete until Garry's Mod confirms the model, materials, physics file and spawnmenu registration.",
+            "",
+            "## Automatic build checks",
+            "",
+        ]
+        for key, value in checks.items():
+            lines.append(f"* {key}: `{json.dumps(value, ensure_ascii=False) if isinstance(value, (list, dict)) else value}`")
+        lines.extend([
+            "",
+            "## Required in game check",
+            "",
+            f"Install the project, restart Garry's Mod, enter Sandbox, then run `ember_validate_{slug}`.",
+            "Return to the Builder and select Read GMod Runtime Check.",
+        ])
+        (reports / "FINAL_VALIDATION.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        self._log(job_id, "Strict prop post build validation report written.")

@@ -65,7 +65,7 @@ def parse_multipart(headers, body: bytes) -> tuple[dict[str, str], dict[str, tup
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "EmberGModBuilder/2.2.6"
+    server_version = "EmberGModBuilder/2.3.0"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stdout.write("[HTTP] " + fmt % args + "\n")
@@ -108,7 +108,7 @@ class Handler(BaseHTTPRequestHandler):
                 cfg = CONFIG_STORE.load()
                 self.send_json({
                     "name": "Ember Guided GMod Character Builder",
-                    "version": "2.2.6",
+                    "version": "2.3.0",
                     "workspace": str(WORKSPACE),
                     "toolchain": tool_status(cfg),
                 })
@@ -185,19 +185,25 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 project_matches = str(result.get("project_id", "")) == record.id
                 build_matches = bool(record.last_job_id) and str(result.get("build_token", "")) == str(record.last_job_id)
-                version_matches = str(result.get("version", "")) == "2.2.6"
+                version_matches = str(result.get("version", "")) == "2.3.0"
                 result["project_matches"] = project_matches
                 result["build_matches"] = build_matches
                 result["version_matches"] = version_matches
                 stale = not (project_matches and build_matches and version_matches)
                 waiting = str(result.get("status", "")) == "installed_waiting_for_game"
-                required_runtime_checks = (
-                    "model_file_exists", "valid_model", "translated_model_matches", "all_valid_models_matches",
-                    "player_options_matches", "hands_model_matches", "ragdoll_entity_registered", "spawnlist_hook_registered",
-                    "clientside_model_created", "sequence_count_valid", "activities_valid", "required_bones_valid",
-                    "materials_valid", "model_info_valid", "core_bone_hierarchy_valid", "render_bounds_valid",
-                    "bone_geometry_valid", "mesh_contract_valid", "physics_contract_valid",
-                )
+                if record.options.asset_type == "prop":
+                    required_runtime_checks = (
+                        "model_file_exists", "valid_model", "clientside_model_created", "materials_valid",
+                        "model_info_valid", "physics_file_exists", "spawnlist_hook_registered",
+                    )
+                else:
+                    required_runtime_checks = (
+                        "model_file_exists", "valid_model", "translated_model_matches", "all_valid_models_matches",
+                        "player_options_matches", "hands_model_matches", "ragdoll_entity_registered", "spawnlist_hook_registered",
+                        "clientside_model_created", "sequence_count_valid", "activities_valid", "required_bones_valid",
+                        "materials_valid", "model_info_valid", "core_bone_hierarchy_valid", "render_bounds_valid",
+                        "bone_geometry_valid", "mesh_contract_valid", "physics_contract_valid", "npc_entities_registered",
+                    )
                 missing_runtime_checks = [name for name in required_runtime_checks if result.get(name) is not True]
                 result["missing_runtime_checks"] = missing_runtime_checks
                 passed = bool(result.get("passed")) and not missing_runtime_checks and not stale and not waiting
@@ -299,10 +305,11 @@ class Handler(BaseHTTPRequestHandler):
             if m:
                 project_id = m.group(1)
                 record = PROJECTS.load(project_id)
-                validation = record.to_dict()["guide_validation"]
-                if not record.guide.get("locked") or validation.get("errors"):
-                    self.send_error_json(409, "Lock a complete landmark guide before building.", "; ".join(validation.get("errors", [])))
-                    return
+                if record.options.asset_type != "prop":
+                    validation = record.to_dict()["guide_validation"]
+                    if not record.guide.get("locked") or validation.get("errors"):
+                        self.send_error_json(409, "Lock a complete landmark guide before building.", "; ".join(validation.get("errors", [])))
+                        return
                 job = JOBS.create_build(project_id)
                 self.send_json(job.to_dict(), 202)
                 return
@@ -325,6 +332,8 @@ class Handler(BaseHTTPRequestHandler):
                         display_name=record.options.display_name,
                         project_id=project_id,
                         build_token=record.last_job_id or "",
+                        asset_type=record.options.asset_type,
+                        generate_npcs=record.options.generate_npcs,
                     )
                 except RuntimeError as exc:
                     self.send_error_json(409, "Install verification failed.", str(exc))

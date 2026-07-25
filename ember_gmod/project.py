@@ -157,11 +157,13 @@ def validate_guide(guide: dict[str, Any], target_height: float) -> dict[str, Any
 class BuildOptions:
     display_name: str
     slug: str
+    asset_type: str = "character"
     animation_base: str = "male"
     target_height: float = 72.0
     quality: str = "good"
     texture_size: int = 1024
     generate_hands: bool = False
+    generate_npcs: bool = False
     compile_model: bool = True
     package_gma: bool = True
     rig_mode: str = "guided"
@@ -171,6 +173,9 @@ class BuildOptions:
     def from_dict(cls, raw: dict[str, Any]) -> "BuildOptions":
         display_name = str(raw.get("display_name", "Character")).strip()[:80] or "Character"
         slug = slugify(str(raw.get("slug") or display_name))
+        asset_type = str(raw.get("asset_type", "character"))
+        if asset_type not in {"character", "prop"}:
+            asset_type = "character"
         animation_base = str(raw.get("animation_base", "male"))
         if animation_base not in {"male", "female"}:
             animation_base = "male"
@@ -191,14 +196,19 @@ class BuildOptions:
         front_axis = str(raw.get("front_axis", "neg_y"))
         if front_axis not in {"neg_y", "pos_y", "pos_x", "neg_x"}:
             front_axis = "neg_y"
+        # NPC variants ride on the player animation library, so a prop can
+        # never carry them regardless of what the payload claims.
+        generate_npcs = bool(raw.get("generate_npcs", False)) and asset_type == "character"
         return cls(
             display_name=display_name,
             slug=slug,
+            asset_type=asset_type,
             animation_base=animation_base,
             target_height=target_height,
             quality=quality,
             texture_size=texture_size,
             generate_hands=bool(raw.get("generate_hands", False)),
+            generate_npcs=generate_npcs,
             compile_model=bool(raw.get("compile_model", True)),
             package_gma=bool(raw.get("package_gma", True)),
             rig_mode="guided",
@@ -223,7 +233,18 @@ class ProjectRecord:
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["options"] = asdict(self.options)
-        result["guide_validation"] = validate_guide(self.guide, self.options.target_height)
+        if self.options.asset_type == "prop":
+            result["guide_validation"] = {
+                "status": "not_required",
+                "errors": [],
+                "warnings": [],
+                "required_count": 0,
+                "assigned_required": 0,
+                "assigned_total": 0,
+                "landmarks": {},
+            }
+        else:
+            result["guide_validation"] = validate_guide(self.guide, self.options.target_height)
         return result
 
 
@@ -270,7 +291,7 @@ class ProjectStore:
             id=project_id,
             created=now,
             updated=now,
-            state="guide_required",
+            state="prop_ready" if options.asset_type == "prop" else "guide_required",
             options=options,
             source_glb=str(glb_path.relative_to(root)),
             inspection=inspection,
@@ -304,16 +325,22 @@ class ProjectStore:
             last_job_id=raw.get("last_job_id"),
             artifact_zip=raw.get("artifact_zip"),
         )
+        if record.options.asset_type == "prop":
+            # A prop has no landmark guide. Never bounce it back to the guide
+            # stage; a stale guide_required from an older record becomes ready.
+            if record.state == "guide_required":
+                record.state = "prop_ready"
+            return record
         guide_validation = validate_guide(record.guide, record.options.target_height)
         if record.state != "building" and (not record.guide.get("locked") or guide_validation["errors"]):
             record.state = "guide_required"
         return record
 
     # Build settings a user may change after creation. The identity fields
-    # (slug, display name) stay fixed because every generated file path carries
-    # them; the guide-space fields are safe because the pipeline rescales the
-    # locked guide to the normalised mesh height on every build.
-    MUTABLE_OPTIONS = ("quality", "texture_size", "target_height")
+    # (slug, display name, asset type) stay fixed because every generated file
+    # path carries them; the guide-space fields are safe because the pipeline
+    # rescales the locked guide to the normalised mesh height on every build.
+    MUTABLE_OPTIONS = ("quality", "texture_size", "target_height", "generate_npcs")
 
     def update_options(self, project_id: str, raw: dict[str, Any]) -> ProjectRecord:
         record = self.load(project_id)
@@ -327,6 +354,8 @@ class ProjectStore:
 
     def update_guide(self, project_id: str, raw: dict[str, Any]) -> ProjectRecord:
         record = self.load(project_id)
+        if record.options.asset_type == "prop":
+            raise ValueError("Prop projects do not use a landmark guide.")
         landmarks_raw = raw.get("landmarks", {})
         landmarks: dict[str, list[float]] = {}
         if isinstance(landmarks_raw, dict):

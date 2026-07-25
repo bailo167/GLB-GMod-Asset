@@ -1,5 +1,13 @@
 # Changelog
 
+## 2.3.0, 25 July 2026
+
+* Prop projects. Step 1 now offers an asset type: a Character runs the full guided rig pipeline, a Prop turns any scanned object into a spawnable, physically simulated Garry's Mod prop. Props skip the landmark guide entirely; the same reduction, atlas rebuild, bake and validation pipeline runs, then the model compiles as `$staticprop` with a convex hull collision model into `models/props/<id>`. The spawn menu gets a category with the model, and the runtime check verifies the model, materials, physics file and registration in game.
+* NPC variants. A character project can now generate NextBot NPCs alongside the player model: Friendly, Hostile with melee, and Hostile armed with a pistol, SMG or shotgun. Armed variants bonemerge the stock HL2 world weapon into the right hand, chase the nearest player, and fire real bullets; hostile melee closes in and swings; the friendly variant wanders. All appear in the spawn menu and the Entities tab, die into ragdolls, and their registration is part of the runtime check. The option is on the Import form and the Build Settings card, so it can be turned on for an existing character without remarking anything.
+* Fixed the settings save reporting Unknown API route. The Builder posted the new build settings while the service only answered PUT for that route.
+* Fixed the Bailey 2 conformance rejection. The bind warp was 99.6% clean but 131 of 35,998 sampled edges stretched severely at anatomical region boundaries, and the whole build was refused even though every displacement and extent gate was green. When the only failure is a rare, localized set of edge outliers, the offending vertices now take the average displacement of their neighbours and the diagnostics run again on the repaired field; the build proceeds only if the repaired warp passes cleanly. A widespread explosion exceeds the repair's outlier budget and still fails.
+* Planned next (not in this release): animation retargeting from community SMD libraries, multi-project batch export, atlas and weight debugging views, VTF compression options. See ROADMAP.md.
+
 ## 2.2.6, 25 July 2026
 
 * Build settings can now change after a project is created. A Build Settings card on the Build page edits quality, texture size and Source height; the locked guide is preserved because every build rescales it to the chosen height. Identity fields such as the slug stay fixed.

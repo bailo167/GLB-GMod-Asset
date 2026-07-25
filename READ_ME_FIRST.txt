@@ -1,32 +1,39 @@
-EMBER GUIDED GMOD CHARACTER BUILDER 2.2.6
+EMBER GUIDED GMOD CHARACTER BUILDER 2.3.0
 
 Close Garry's Mod and every old Builder window before updating.
 
-Apply this 2.2.6 update to the existing V2 tool folder. The complete workspace, original GLB
+Apply this 2.3.0 update to the existing V2 tool folder. The complete workspace, original GLB
 and locked guide are preserved. Nothing needs to be marked again.
 
-Restart the Builder and confirm Service v2.2.6. Open the project and select Build + Install.
+Restart the Builder and confirm Service v2.3.0.
 
-WHAT CHANGED
+WHAT IS NEW
 
-2.1.1 reduced the mesh to 32,000 triangles and then reused the UV coordinates and texture
-that belonged to the 500,000 triangle import. Those coordinates no longer matched the
-reduced triangles, which is why skin appeared on clothing and the shirt appeared across
-trousers.
+PROPS. Step 1 now asks whether the GLB is a Character or a Prop. A Prop is any scanned
+object: it skips the landmark guide completely, runs the same mesh reduction, atlas rebuild
+and texture bake, and compiles as a static prop with physics into models/props. It appears
+in the spawn menu under its own category and can be spawned, pushed and thrown like any
+Half-Life 2 prop.
 
-2.2.6 keeps a full resolution textured copy of the import, builds a brand new UV atlas on
-the reduced mesh, and bakes the colour from the high resolution copy onto it. The build now
-stops if the atlas or the bake fails validation, instead of compiling a scrambled texture.
+NPC VARIANTS. A character project can now also generate NPCs: Friendly, Hostile, and
+Hostile armed with a pistol, SMG or shotgun. They use the compiled player model, walk and
+run with the standard animations, chase and attack players when hostile, and die into
+ragdolls. Enable "Create NPC variants" on the Import form for a new project, or on the
+Build Settings card for an existing one, then Build + Install again. They appear in the
+spawn menu category and in the Entities tab.
+
+CONFORMANCE REPAIR. A build that previously failed with "the stock skeleton conformance
+stage rejected this mesh" because of a small number of severe edge outliers (the Bailey 2
+failure) now repairs those vertices from their neighbours and revalidates instead of
+refusing the build. A genuinely broken warp still fails.
+
+Also fixed: saving Build Settings no longer reports Unknown API route.
 
 WHAT TO CHECK FIRST
 
-After the build, look at the BAKED TEXTURE PROOF card on the Build page. It shows the front
-and back of the reduced model wearing the newly baked texture, rendered inside Blender
-before StudioMDL ran. If those renders look right, the texture placement is fixed. The same
-images are saved in the project under generated as <slug>_texture_proof_front.png and
-<slug>_texture_proof_back.png.
-
-The bake stage adds roughly a minute to the build.
+After a character build, look at the BAKED TEXTURE PROOF card on the Build page. After a
+prop build, the same card shows the front and back of the reduced prop wearing the newly
+baked texture.
 
 Fully restart Garry's Mod and enter Sandbox. Return to the Builder and select Read GMod
 Runtime Check.

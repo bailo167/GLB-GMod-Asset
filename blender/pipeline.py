@@ -35,6 +35,7 @@ from bake_validation import (
 from rig_math import (
     anatomical_influences,
     classify_region,
+    repair_localized_edge_outliers,
     rescale_guide_landmarks,
     robust_edge_deformation,
     validate_influences,
@@ -478,20 +479,57 @@ def conform_mesh_to_standard_skeleton(obj: bpy.types.Object, source_bones: list[
 
     before_min, before_max, before_dims = dimensions(before)
     after_min, after_max, after_dims = dimensions(candidate)
-    edge_pairs: list[tuple[float, float]] = []
-    stride = max(1, len(obj.data.edges) // 32000)
-    for edge_index in range(0, len(obj.data.edges), stride):
-        first, second = obj.data.edges[edge_index].vertices
-        old_length = (before[first] - before[second]).length
-        new_length = (candidate[first] - candidate[second]).length
-        edge_pairs.append((old_length, new_length))
-    edge_stats = robust_edge_deformation(edge_pairs, height)
+
+    def sampled_edge_stats(points: list[Vector]) -> dict[str, Any]:
+        edge_pairs: list[tuple[float, float]] = []
+        stride = max(1, len(obj.data.edges) // 32000)
+        for edge_index in range(0, len(obj.data.edges), stride):
+            first, second = obj.data.edges[edge_index].vertices
+            edge_pairs.append(((before[first] - before[second]).length, (points[first] - points[second]).length))
+        return robust_edge_deformation(edge_pairs, height)
+
+    edge_stats = sampled_edge_stats(candidate)
 
     maximum = max(displacements, default=0.0)
     average = sum(displacements) / max(len(displacements), 1)
     lateral_ok = height * 0.48 <= after_dims.x <= height * 1.35
     depth_ok = height * 0.035 <= after_dims.y <= height * 0.60
     vertical_ok = height * 0.72 <= after_dims.z <= height * 1.20 and after_min.z >= -height * 0.12
+
+    # The Bailey 2 build proved a warp can be 99.6% clean while a handful of
+    # region-boundary edges stretch severely: 131 severe edges of 35,998, every
+    # other gate green, and the whole build was refused. When the only failure
+    # is a rare, localized set of edge outliers, the offending vertices take the
+    # average displacement of their neighbours and the diagnostics run again on
+    # the repaired field. A widespread explosion exceeds the repair's outlier
+    # budget and is still rejected.
+    edge_repair: dict[str, Any] = {"attempted": False, "reason": "not_needed"}
+    displacement_gates_ok = (
+        non_finite == 0
+        and maximum <= height * 0.35
+        and average <= height * 0.14
+        and lateral_ok and depth_ok and vertical_ok
+    )
+    if displacement_gates_ok and not bool(edge_stats["passed"]):
+        rest_points = [(v.x, v.y, v.z) for v in before]
+        warped_points = [(v.x, v.y, v.z) for v in candidate]
+        all_edges = [tuple(edge.vertices) for edge in obj.data.edges]
+        repair = repair_localized_edge_outliers(rest_points, warped_points, all_edges, height)
+        edge_repair = {key: value for key, value in repair.items() if key != "repaired"}
+        if repair["attempted"] and repair["repaired"] is not None:
+            repaired_candidate = [Vector(point) for point in repair["repaired"]]
+            repaired_stats = sampled_edge_stats(repaired_candidate)
+            edge_repair["passed_after_repair"] = bool(repaired_stats["passed"])
+            if repaired_stats["passed"]:
+                candidate = repaired_candidate
+                edge_stats = repaired_stats
+                displacements = [(candidate[index] - before[index]).length for index in range(len(before))]
+                maximum = max(displacements, default=0.0)
+                average = sum(displacements) / max(len(displacements), 1)
+                after_min, after_max, after_dims = dimensions(candidate)
+                lateral_ok = height * 0.48 <= after_dims.x <= height * 1.35
+                depth_ok = height * 0.035 <= after_dims.y <= height * 0.60
+                vertical_ok = height * 0.72 <= after_dims.z <= height * 1.20 and after_min.z >= -height * 0.12
 
     # A guide within roughly one hand-width of the stock bind does not need a
     # destructive per-bone warp. The user's failing Jack Hegarty build measured a
@@ -525,7 +563,7 @@ def conform_mesh_to_standard_skeleton(obj: bpy.types.Object, source_bones: list[
         for vertex, conformed in zip(obj.data.vertices, candidate):
             vertex.co = inverse_object @ conformed
         obj.data.update()
-        mode = "guided_to_stock_lbs"
+        mode = "guided_to_stock_lbs_repaired" if edge_repair.get("passed_after_repair") else "guided_to_stock_lbs"
         applied = True
         fallback_reason = ""
     elif stock_compatible_without_warp:
@@ -565,6 +603,7 @@ def conform_mesh_to_standard_skeleton(obj: bpy.types.Object, source_bones: list[
         "vertical_extent_valid": vertical_ok,
         "candidate_edge_deformation_valid": bool(edge_stats["passed"]),
         "edge_deformation_valid": bool(edge_stats["passed"]) if applied else True,
+        "edge_repair": edge_repair,
         "stock_compatible_without_warp": stock_compatible_without_warp,
         "localized_edge_discontinuity": localized_edge_discontinuity,
         "fallback_reason": fallback_reason,
@@ -1692,7 +1731,7 @@ def save_tga(image: bpy.types.Image, tga_path: Path, texture_size: int, normal_m
         bpy.data.images.remove(export)
 
 
-def extract_materials(obj: bpy.types.Object, materials_dir: Path, texture_size: int, slug: str) -> list[dict[str, Any]]:
+def extract_materials(obj: bpy.types.Object, materials_dir: Path, texture_size: int, slug: str, category: str = "player") -> list[dict[str, Any]]:
     """Export the safest Source 1 material contract.
 
     The previous release translated glTF normal, metallic and roughness inputs into
@@ -1741,7 +1780,7 @@ def extract_materials(obj: bpy.types.Object, materials_dir: Path, texture_size: 
         vmt_lines = [
             '"VertexLitGeneric"',
             '{',
-            f'    "$basetexture" "models/player/{slug}/{base}"',
+            f'    "$basetexture" "models/{category}/{slug}/{base}"',
             '    "$model" "1"',
             '    "$halflambert" "1"',
         ]
@@ -2300,6 +2339,111 @@ def _write_ragdoll_qci(modelsrc: Path, slug: str) -> Path:
     return path
 
 
+# A static prop compiles against a single root bone. StudioMDL collapses it
+# under $staticprop; the exporter's fallback weighting assigns every vertex to
+# bone zero, which is exactly the contract a prop SMD needs.
+PROP_BONES: list[dict[str, Any]] = [
+    {"name": "static_prop", "parent": None, "local_pos": (0.0, 0.0, 0.0), "local_rot": (0.0, 0.0, 0.0)},
+]
+
+
+def normalise_prop(obj: bpy.types.Object, target_size: float, front_axis: str = "neg_y") -> dict[str, Any]:
+    """Normalise a scanned object: largest dimension to the target size, resting on the ground.
+
+    A prop has no anatomy, so unlike a character the vertical axis is not special.
+    Scaling the largest bounding dimension keeps a sword, a crate and a statue all
+    usable from the same size field.
+    """
+    rotation_degrees = {"neg_y": 0.0, "pos_y": 180.0, "pos_x": -90.0, "neg_x": 90.0}.get(front_axis, 0.0)
+    obj.rotation_euler[2] += math.radians(rotation_degrees)
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+    bpy.ops.object.transform_apply(location=False, rotation=True, scale=False)
+
+    coords = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+    min_v = Vector((min(v.x for v in coords), min(v.y for v in coords), min(v.z for v in coords)))
+    max_v = Vector((max(v.x for v in coords), max(v.y for v in coords), max(v.z for v in coords)))
+    dims = max_v - min_v
+    largest = max(dims.x, dims.y, dims.z)
+    if largest <= 1e-6:
+        raise RuntimeError("The imported mesh has zero size.")
+    scale = float(target_size) / largest
+    obj.scale = (scale, scale, scale)
+    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+
+    coords = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+    min_v = Vector((min(v.x for v in coords), min(v.y for v in coords), min(v.z for v in coords)))
+    max_v = Vector((max(v.x for v in coords), max(v.y for v in coords), max(v.z for v in coords)))
+    centre_xy = Vector(((min_v.x + max_v.x) / 2.0, (min_v.y + max_v.y) / 2.0, 0.0))
+    obj.location -= Vector((centre_xy.x, centre_xy.y, min_v.z))
+    bpy.ops.object.transform_apply(location=True, rotation=False, scale=False)
+
+    coords = [obj.matrix_world @ Vector(corner) for corner in obj.bound_box]
+    min_v = Vector((min(v.x for v in coords), min(v.y for v in coords), min(v.z for v in coords)))
+    max_v = Vector((max(v.x for v in coords), max(v.y for v in coords), max(v.z for v in coords)))
+    return {
+        "target_height": float(target_size),
+        "scale_factor": scale,
+        "bounds_min": list(min_v),
+        "bounds_max": list(max_v),
+        "width": max_v.x - min_v.x,
+        "depth": max_v.y - min_v.y,
+        "height": max_v.z - min_v.z,
+        "largest_dimension": max(max_v.x - min_v.x, max_v.y - min_v.y, max_v.z - min_v.z),
+        "input_front_axis": front_axis,
+        "rotation_to_source_degrees": rotation_degrees,
+        "source_axes": "X left, negative Y forward, Z up",
+    }
+
+
+def create_prop_collision(source: bpy.types.Object) -> bpy.types.Object:
+    """Build a convex hull collision mesh for a scanned prop.
+
+    StudioMDL hulls a non-$concave $collisionmodel itself, so the exported
+    geometry only has to enclose the object with a small vertex count. A hull of
+    the reduced mesh does that with a few hundred faces instead of 48,000.
+    """
+    collision = source.copy()
+    collision.data = source.data.copy()
+    collision.name = "prop_collision"
+    bpy.context.collection.objects.link(collision)
+    collision.vertex_groups.clear()
+    mesh = bmesh.new()
+    mesh.from_mesh(collision.data)
+    hull = bmesh.ops.convex_hull(mesh, input=list(mesh.verts))
+    interior = [item for item in hull.get("geom_interior", []) if isinstance(item, bmesh.types.BMVert)]
+    unused = [item for item in hull.get("geom_unused", []) if isinstance(item, bmesh.types.BMVert)]
+    bmesh.ops.delete(mesh, geom=list({*interior, *unused}), context="VERTS")
+    bmesh.ops.triangulate(mesh, faces=list(mesh.faces))
+    mesh.to_mesh(collision.data)
+    mesh.free()
+    collision.data.materials.clear()
+    collision.data.update()
+    return collision
+
+
+def generate_prop_qc(modelsrc: Path, slug: str, materials: list[dict[str, Any]], bounds: dict[str, Any]) -> Path:
+    qc = modelsrc / f"{slug}.qc"
+    centre_z = float(bounds["height"]) / 2.0
+    lines = [
+        f'$modelname "props/{slug}/{slug}.mdl"',
+        f'$body "body" "{slug}_reference.smd"',
+        '$staticprop',
+        '$surfaceprop "default"',
+        f'$cdmaterials "models/props/{slug}"',
+        '$contents "solid"',
+        '$mostlyopaque',
+        f'$illumposition 0 0 {centre_z:.2f}',
+        f'$sequence "idle" "{slug}_reference.smd" fps 1',
+        f'$collisionmodel "{slug}_physics.smd"',
+        '{',
+        '    $automass',
+        '}',
+    ]
+    qc.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return qc
+
+
 def generate_qc(modelsrc: Path, slug: str, animation_base: str, lods: list[str], materials: list[dict[str, Any]], bones: list[dict[str, Any]]) -> Path:
     animation = {"male": "m_anm.mdl", "female": "f_anm.mdl"}[animation_base]
     _write_hitbox_qci(modelsrc)
@@ -2339,8 +2483,8 @@ def generate_qc(modelsrc: Path, slug: str, animation_base: str, lods: list[str],
     return qc
 
 
-def generate_addon(addon: Path, slug: str, display_name: str, material_src: Path, generate_hands: bool) -> None:
-    material_target = addon / "materials" / "models" / "player" / slug
+def generate_addon(addon: Path, slug: str, display_name: str, material_src: Path, generate_hands: bool, category: str = "player") -> None:
+    material_target = addon / "materials" / "models" / category / slug
     material_target.mkdir(parents=True, exist_ok=True)
     for source in material_src.glob("*.vmt"):
         shutil.copy2(source, material_target / source.name)
@@ -2376,15 +2520,17 @@ def main(config_path: Path) -> None:
     config = json.loads(config_path.read_text(encoding="utf-8"))
     root = Path(config["project_root"])
     options = config["options"]
+    asset_type = str(options.get("asset_type", "character"))
+    category = "props" if asset_type == "prop" else "player"
     guide = config.get("guide") or {}
-    if not guide.get("locked"):
+    if asset_type != "prop" and not guide.get("locked"):
         raise RuntimeError("The guided rig is not locked. Return to the workbench and confirm all landmarks.")
     slug = slugify(options["slug"])
     display_name = options["display_name"]
     generated = root / "generated"
     modelsrc = generated / "modelsrc"
     material_root = generated / "materialsrc"
-    material_src = material_root / "models" / "player" / slug
+    material_src = material_root / "models" / category / slug
     addon = root / "addon"
     reports = root / "reports"
     for directory in (generated, modelsrc, material_src, addon, reports):
@@ -2396,7 +2542,10 @@ def main(config_path: Path) -> None:
     meshes = import_glb(Path(config["source_glb"]))
     obj = join_meshes(meshes)
     cleanup = cleanup_mesh(obj)
-    bounds = normalise_character(obj, float(options.get("target_height", 72.0)), options.get("front_axis", "neg_y"))
+    if asset_type == "prop":
+        bounds = normalise_prop(obj, float(options.get("target_height", 72.0)), options.get("front_axis", "neg_y"))
+    else:
+        bounds = normalise_character(obj, float(options.get("target_height", 72.0)), options.get("front_axis", "neg_y"))
     quality = options.get("quality", "good")
     base_targets = {"fast": 18000, "good": 32000, "workshop": 48000}
     # Keep the untouched high resolution import before anything reduces the mesh.
@@ -2436,6 +2585,85 @@ def main(config_path: Path) -> None:
             + " | ".join(texture_bake["failure_detail"])
         )
     log("Texture bake validated: new atlas, full triangle coverage and real colour variation.")
+
+    if asset_type == "prop":
+        physics = create_prop_collision(obj)
+        materials = extract_materials(obj, material_src, texture_size, slug, category="props")
+        smd_results: dict[str, Any] = {}
+        reference_path = modelsrc / f"{slug}_reference.smd"
+        smd_results["reference"] = export_smd(reference_path, [obj], PROP_BONES)
+        smd_results["physics"] = export_smd(modelsrc / f"{slug}_physics.smd", [physics], PROP_BONES)
+        if smd_results["reference"]["triangles"] <= 0 or smd_results["physics"]["triangles"] <= 0:
+            raise RuntimeError("The prop reference or collision SMD exported no triangles.")
+        qc = generate_prop_qc(modelsrc, slug, materials, bounds)
+        generate_addon(addon, slug, display_name, material_src, False, category="props")
+        app_root = Path(config["app_root"])
+        if str(app_root) not in sys.path:
+            sys.path.insert(0, str(app_root))
+        from ember_gmod.runtime_addon import ensure_runtime_addon_files
+        ensure_runtime_addon_files(
+            addon,
+            slug,
+            display_name,
+            project_id=str(config.get("project_id", "")),
+            build_token=str(config.get("runtime_token", "")),
+            asset_type="prop",
+        )
+        generate_compile_scripts(generated, qc, slug, config.get("toolchain", {}), material_src)
+
+        icon_path = generated / f"{slug}_workshop_icon.jpg"
+        icon_rendered = render_workshop_icon(icon_path, obj, bounds)
+        blend_path = generated / f"{slug}_source.blend"
+        bpy.ops.wm.save_as_mainfile(filepath=str(blend_path))
+
+        report = {
+            "status": "source_ready",
+            "asset_type": "prop",
+            "display_name": display_name,
+            "slug": slug,
+            "cleanup": cleanup,
+            "base_reduction": base_reduction,
+            "texture_bake": texture_bake,
+            "bounds": bounds,
+            "materials": materials,
+            "smd": smd_results,
+            "qc": str(qc.relative_to(root)).replace("\\", "/"),
+            "blend": str(blend_path.relative_to(root)).replace("\\", "/"),
+            "checks": {
+                "prop_pipeline": True,
+                "static_prop_qc": True,
+                "collision_hull_generated": smd_results["physics"]["triangles"] > 0,
+                "reference_smd_validated": smd_results["reference"]["triangles"] > 0,
+                "physics_generated": True,
+                "workshop_icon_rendered": icon_rendered,
+                "source_materials_generated": len(materials),
+                "uv_atlas_rebuilt_on_reduced_mesh": texture_bake["atlas"]["layer"] == BAKE_UV_LAYER,
+                "original_uv_map_discarded": not texture_bake["source_uv_reused"],
+                "texture_baked_from_high_resolution": texture_bake["method"] == "cycles_selected_to_active_diffuse_colour",
+                "uv_coordinates_finite": texture_bake["checks"]["uv_coordinates_finite"],
+                "uv_inside_atlas": texture_bake["checks"]["uv_inside_atlas"],
+                "atlas_islands_do_not_overlap": texture_bake["checks"]["islands_do_not_overlap"],
+                "every_triangle_has_bake_coverage": texture_bake["checks"]["every_triangle_has_bake_coverage"],
+                "atlas_resolution_adequate": texture_bake["checks"]["atlas_resolution_adequate"],
+                "bake_has_colour_variation": texture_bake["checks"]["bake_has_colour_variation"],
+                "no_large_unpainted_regions": texture_bake["checks"]["no_large_unpainted_regions"],
+                "baked_material_rendered_in_blender": texture_bake["checks"]["baked_material_rendered_in_blender"],
+                "texture_bake_passed": texture_bake["passed"],
+            },
+            "manual_review": [
+                f"Open {slug}_texture_proof_front.png and {slug}_texture_proof_back.png in generated to see the baked material rendered in Blender.",
+                "The final Complete state requires validated VTF output, StudioMDL output and Garry's Mod runtime validation.",
+            ],
+        }
+        reports.joinpath("build_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+        reports.joinpath("VALIDATION.md").write_text(
+            "# Source generation\n\n"
+            "Static prop source files were generated from the reduced and rebaked scan.\n\n"
+            "The build is not considered complete until VTF generation, StudioMDL and the in game runtime check pass.\n",
+            encoding="utf-8",
+        )
+        log("Prop pipeline source generation complete")
+        return
 
     animation_base = options.get("animation_base", "male")
     source_guide = guide_in_source_axes(guide)
