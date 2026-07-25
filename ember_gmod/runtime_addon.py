@@ -7,7 +7,7 @@ import zlib
 from pathlib import Path
 
 
-VERSION = "2.2.3"
+VERSION = "2.2.4"
 _SLUG_RE = re.compile(r"^[a-z0-9_]{1,48}$")
 
 

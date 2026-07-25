@@ -368,7 +368,7 @@ class JobManager:
                 self._log(
                     job_id,
                     f"Wrote validated {kind} VTF {destination.name}: "
-                    f"{info.width}x{info.height}, BGRA8888, one mip, {destination.stat().st_size} bytes.",
+                    f"{info.width}x{info.height}, BGRA8888, {info.mip_count} mip levels, {destination.stat().st_size} bytes.",
                 )
             except Exception as exc:
                 destination.unlink(missing_ok=True)

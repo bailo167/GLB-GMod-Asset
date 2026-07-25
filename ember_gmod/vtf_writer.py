@@ -129,8 +129,53 @@ def _average_rgb(pixels_bgra: bytes) -> tuple[float, float, float, int, int, int
     return r_total * scale, g_total * scale, b_total * scale, r8, g8, b8
 
 
+def expected_mip_count(width: int, height: int) -> int:
+    count = 1
+    while width > 1 or height > 1:
+        width = max(1, width // 2)
+        height = max(1, height // 2)
+        count += 1
+    return count
+
+
+def _downsample_bgra(pixels: bytes, width: int, height: int) -> tuple[bytes, int, int]:
+    """Box filter one mip level down, averaging 2x2 blocks per channel."""
+    new_width = max(1, width // 2)
+    new_height = max(1, height // 2)
+    out = bytearray(new_width * new_height * 4)
+    for y in range(new_height):
+        y0 = min(2 * y, height - 1) * width
+        y1 = min(2 * y + 1, height - 1) * width
+        for x in range(new_width):
+            x0 = min(2 * x, width - 1)
+            x1 = min(2 * x + 1, width - 1)
+            a = (y0 + x0) * 4
+            b = (y0 + x1) * 4
+            c = (y1 + x0) * 4
+            d = (y1 + x1) * 4
+            target = (y * new_width + x) * 4
+            for channel in range(4):
+                out[target + channel] = (
+                    pixels[a + channel] + pixels[b + channel] + pixels[c + channel] + pixels[d + channel] + 2
+                ) >> 2
+    return bytes(out), new_width, new_height
+
+
+def build_mip_chain(pixels: bytes, width: int, height: int) -> list[tuple[bytes, int, int]]:
+    """Full mip chain, largest level first."""
+    chain = [(pixels, width, height)]
+    while width > 1 or height > 1:
+        pixels, width, height = _downsample_bgra(pixels, width, height)
+        chain.append((pixels, width, height))
+    return chain
+
+
 def build_vtf(image: TgaImage, *, normal_map: bool = False) -> bytes:
-    flags = TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_NOLOD
+    # A full mip chain is required for a texture that is ever seen at distance.
+    # The v2.2.x atlas is thousands of small UV islands; sampling it without
+    # mips made distant player models dissolve into per-texel noise, because the
+    # GPU had no prefiltered levels and picked essentially arbitrary texels.
+    flags = 0
     if normal_map:
         flags |= TEXTUREFLAGS_NORMAL
     else:
@@ -138,6 +183,7 @@ def build_vtf(image: TgaImage, *, normal_map: bool = False) -> bytes:
     if image.has_alpha:
         flags |= TEXTUREFLAGS_EIGHTBITALPHA
 
+    chain = build_mip_chain(image.pixels_bgra, image.width, image.height)
     reflect_r, reflect_g, reflect_b, average_r, average_g, average_b = _average_rgb(image.pixels_bgra)
     header = bytearray(VTF_HEADER_SIZE)
     struct.pack_into("<4sIII", header, 0, VTF_SIGNATURE, VTF_MAJOR, VTF_MINOR, VTF_HEADER_SIZE)
@@ -146,12 +192,14 @@ def build_vtf(image: TgaImage, *, normal_map: bool = False) -> bytes:
     struct.pack_into("<3f", header, 32, reflect_r, reflect_g, reflect_b)
     # Bytes 44 to 47 are the documented alignment pad after reflectivity.
     struct.pack_into("<fI", header, 48, 1.0, IMAGE_FORMAT_BGRA8888)
-    struct.pack_into("<B", header, 56, 1)
+    struct.pack_into("<B", header, 56, len(chain))
     struct.pack_into("<I", header, 57, IMAGE_FORMAT_DXT1)
     struct.pack_into("<BBH", header, 61, 4, 4, 1)
 
     thumbnail = _solid_dxt1_thumbnail(average_r, average_g, average_b)
-    return bytes(header) + thumbnail + image.pixels_bgra
+    # VTF stores mip levels smallest first, each followed by the next larger.
+    body = b"".join(level_pixels for level_pixels, _w, _h in reversed(chain))
+    return bytes(header) + thumbnail + body
 
 
 def inspect_vtf(path: Path) -> VtfInfo:
@@ -178,18 +226,24 @@ def inspect_vtf(path: Path) -> VtfInfo:
         raise ValueError(f"{path.name}: expected one frame, got {frame_count}")
     if image_format != IMAGE_FORMAT_BGRA8888:
         raise ValueError(f"{path.name}: expected BGRA8888 format, got {image_format}")
-    if mip_count != 1:
-        raise ValueError(f"{path.name}: expected one mip level, got {mip_count}")
+    if not (_is_power_of_two(width) and _is_power_of_two(height)):
+        raise ValueError(f"{path.name}: invalid dimensions {width}x{height}")
+    expected_mips = expected_mip_count(width, height)
+    if mip_count != expected_mips:
+        raise ValueError(f"{path.name}: expected a full chain of {expected_mips} mip levels, got {mip_count}")
     if low_res_format != IMAGE_FORMAT_DXT1 or (low_res_width, low_res_height) != (4, 4):
         raise ValueError(f"{path.name}: expected a 4x4 DXT1 thumbnail")
     if depth != 1:
         raise ValueError(f"{path.name}: expected depth 1, got {depth}")
-    if not (_is_power_of_two(width) and _is_power_of_two(height)):
-        raise ValueError(f"{path.name}: invalid dimensions {width}x{height}")
 
     thumbnail_size = 8
     image_offset = header_size + thumbnail_size
-    image_size = width * height * 4
+    image_size = 0
+    level_width, level_height = width, height
+    for _level in range(expected_mips):
+        image_size += level_width * level_height * 4
+        level_width = max(1, level_width // 2)
+        level_height = max(1, level_height // 2)
     expected_size = image_offset + image_size
     if len(data) != expected_size:
         raise ValueError(f"{path.name}: file size is {len(data)}, expected {expected_size}")
