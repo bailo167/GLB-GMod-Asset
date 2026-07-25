@@ -1,7 +1,7 @@
 'use strict';
 import { GLBViewer } from './viewer.js';
 
-const REQUIRED_SERVICE_VERSION = '2.2.4';
+const REQUIRED_SERVICE_VERSION = '2.2.5';
 const CENTER_DEPTH = new Set(['head_top','neck_base','shoulder_l','shoulder_r','elbow_l','elbow_r','wrist_l','wrist_r','pelvis','hip_l','hip_r','knee_l','knee_r','ankle_l','ankle_r']);
 const REQUIRED = ['head_top','neck_base','shoulder_l','elbow_l','wrist_l','shoulder_r','elbow_r','wrist_r','pelvis','hip_l','knee_l','ankle_l','toe_l','hip_r','knee_r','ankle_r','toe_r'];
 const OPTIONAL = ['chin','eye_l','eye_r','hand_tip_l','hand_tip_r','heel_l','heel_r'];

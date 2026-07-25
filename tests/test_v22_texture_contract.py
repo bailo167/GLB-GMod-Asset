@@ -247,3 +247,14 @@ def test_the_vtf_ships_a_full_mip_chain():
     assert "def build_mip_chain" in writer
     assert "chain = build_mip_chain(image.pixels_bgra, image.width, image.height)" in writer
     assert "flags = TEXTUREFLAGS_NOMIP | TEXTUREFLAGS_NOLOD" not in writer
+
+
+def test_smd_uvs_are_written_in_blender_v_orientation_without_a_flip():
+    # The SMD text format stores V bottom-origin, same as Blender; StudioMDL
+    # does the DirectX flip itself. Every release through 2.2.4 pre-flipped V in
+    # export_smd, so the game sampled the atlas vertically mirrored while the
+    # Blender proof renders looked correct. This was the last difference between
+    # the proof and the game.
+    section = PIPELINE[PIPELINE.index("def export_smd"):PIPELINE.index("def point_camera")]
+    assert "{uv.x:.6f} {uv.y:.6f}" in section
+    assert "1.0 - uv.y" not in PIPELINE
