@@ -1,7 +1,7 @@
 'use strict';
 import { GLBViewer } from './viewer.js';
 
-const REQUIRED_SERVICE_VERSION = '2.2.5';
+const REQUIRED_SERVICE_VERSION = '2.2.6';
 const CENTER_DEPTH = new Set(['head_top','neck_base','shoulder_l','shoulder_r','elbow_l','elbow_r','wrist_l','wrist_r','pelvis','hip_l','hip_r','knee_l','knee_r','ankle_l','ankle_r']);
 const REQUIRED = ['head_top','neck_base','shoulder_l','elbow_l','wrist_l','shoulder_r','elbow_r','wrist_r','pelvis','hip_l','knee_l','ankle_l','toe_l','hip_r','knee_r','ankle_r','toe_r'];
 const OPTIONAL = ['chin','eye_l','eye_r','hand_tip_l','hand_tip_r','heel_l','heel_r'];
@@ -121,7 +121,7 @@ async function openProject(id) {
     const source=await api(`/api/projects/${id}/source`);
     await state.viewer.load(source,{frontAxis:project.options.front_axis,targetHeight:project.options.target_height});
     state.viewer.setLandmarks(state.guide.landmarks||{}); $('#viewportEmpty').classList.add('hidden');
-    renderLandmarks(); renderGuideValidation(project.guide_validation); renderRigidZones(); updateGuideState();
+    renderLandmarks(); renderGuideValidation(project.guide_validation); renderRigidZones(); updateGuideState(); populateBuildSettings();
     refreshFiles(); refreshReport(); showPanel(project.guide?.locked?'build':'guide');
   } catch(error) {
     const empty=$('#viewportEmpty');
@@ -235,6 +235,22 @@ function checkRowState(name,value){
   if(Array.isArray(value))return PROBLEM_LIST_PATTERN.test(name)?value.length===0:value.length>0;
   return true;
 }
+function populateBuildSettings() {
+  const options=state.project?.options; if(!options)return;
+  $('#optQuality').value=options.quality;
+  $('#optTextureSize').value=String(options.texture_size);
+  $('#optTargetHeight').value=String(options.target_height);
+}
+async function saveBuildSettings() {
+  if(!state.project)return;
+  const payload={quality:$('#optQuality').value,texture_size:Number($('#optTextureSize').value),target_height:Number($('#optTargetHeight').value)};
+  try {
+    const project=await api(`/api/projects/${state.project.id}/options`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    state.project=project; populateBuildSettings();
+    $('#guideSubtitle').textContent=`${project.options.display_name} · ${project.options.target_height} inches · ${project.options.animation_base} animation base`;
+    toast('Build settings saved',`${project.options.quality} quality, ${project.options.texture_size} texture, ${project.options.target_height} inches. They apply on the next Build + Install.`);
+  } catch(error){ toast('Settings not saved',error.message); }
+}
 async function refreshReport() { if(!state.project)return; try { const report=await api(`/api/projects/${state.project.id}/report`),checks=report.post_build||report.checks||{}; const rows=flattenChecks(checks).filter(([,v])=>typeof v==='boolean'||typeof v==='number'||Array.isArray(v)); $('#buildValidation').innerHTML=rows.length?rows.map(([name,value])=>{const ok=checkRowState(name,value);return`<div class="check-row ${ok?'':'bad'}"><i></i><span><b>${escapeHtml(name.replaceAll('_',' '))}</b><br>${escapeHtml(Array.isArray(value)?JSON.stringify(value):String(value))}</span></div>`}).join(''):'<div class="notice">No strict validation report yet.</div>'; updatePipeline(report.status,checks); refreshTextureProof(checks); }
   catch(error){$('#buildValidation').innerHTML=`<div class="notice">${escapeHtml(error.message)}</div>`;}
 }
@@ -308,7 +324,7 @@ function bind() {
   $('#autoSeedBtn').addEventListener('click',()=>{if(!state.viewer||!state.project)return;state.guide.landmarks=state.viewer.autoSeed();state.guide.locked=false;renderLandmarks();updateGuideState();localGuideValidation();toast('Landmarks seeded','Review every marker and click the exact joint positions before locking.');});
   $('#clearGuideBtn').addEventListener('click',clearGuide); $('#saveGuideBtn').addEventListener('click',()=>saveGuide(false)); $('#lockGuideBtn').addEventListener('click',()=>saveGuide(true));
   $('#applyCoordsBtn').addEventListener('click',applyCoordinates); $('#centerDepthBtn').addEventListener('click',centerSelectedDepth); $('#mirrorBtn').addEventListener('click',mirrorSelected); $('#removePointBtn').addEventListener('click',removePoint); $('#addRigidZoneBtn').addEventListener('click',addRigidZone);
-  $('#runBuildBtn').addEventListener('click',runBuild); $('#installBtn').addEventListener('click',installProject); $('#runtimeCheckBtn').addEventListener('click',readRuntimeCheck); $('#refreshReportBtn').addEventListener('click',refreshReport); $('#refreshFilesBtn').addEventListener('click',refreshFiles); $('#downloadBtn').addEventListener('click',downloadOutput);
+  $('#runBuildBtn').addEventListener('click',runBuild); $('#saveOptionsBtn').addEventListener('click',saveBuildSettings); $('#installBtn').addEventListener('click',installProject); $('#runtimeCheckBtn').addEventListener('click',readRuntimeCheck); $('#refreshReportBtn').addEventListener('click',refreshReport); $('#refreshFilesBtn').addEventListener('click',refreshFiles); $('#downloadBtn').addEventListener('click',downloadOutput);
   $('#saveToolchainBtn').addEventListener('click',saveToolchain); $('#refreshToolchainBtn').addEventListener('click',loadToolchain);
 }
 

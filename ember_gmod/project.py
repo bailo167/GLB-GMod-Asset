@@ -309,6 +309,22 @@ class ProjectStore:
             record.state = "guide_required"
         return record
 
+    # Build settings a user may change after creation. The identity fields
+    # (slug, display name) stay fixed because every generated file path carries
+    # them; the guide-space fields are safe because the pipeline rescales the
+    # locked guide to the normalised mesh height on every build.
+    MUTABLE_OPTIONS = ("quality", "texture_size", "target_height")
+
+    def update_options(self, project_id: str, raw: dict[str, Any]) -> ProjectRecord:
+        record = self.load(project_id)
+        merged = asdict(record.options)
+        for key in self.MUTABLE_OPTIONS:
+            if key in raw:
+                merged[key] = raw[key]
+        record.options = BuildOptions.from_dict(merged)
+        self.save(record)
+        return self.load(project_id)
+
     def update_guide(self, project_id: str, raw: dict[str, Any]) -> ProjectRecord:
         record = self.load(project_id)
         landmarks_raw = raw.get("landmarks", {})

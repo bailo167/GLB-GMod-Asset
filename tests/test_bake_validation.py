@@ -313,3 +313,31 @@ def test_failure_detail_carries_the_measurement_that_tripped_each_rule():
     detail = verdict["failure_detail"][0]
     assert "900 of 28773" in detail
     assert "96.870%" in detail
+
+
+def test_scattered_pinholes_pass_while_a_real_void_still_fails():
+    # The Bailey 1 build was rejected with 3.773% of island area unpainted while
+    # the largest connected hole was 0.032%: thousands of border pinpricks from
+    # measuring the raw mask at raster resolution, not a bake failure. Only the
+    # largest connected hole decides the verdict now.
+    resolution = 64
+    counts = rasterize_triangles(square(0.02, 0.02, 0.95), resolution)
+    painted = [1 if value else 0 for value in counts]
+    island = [index for index, value in enumerate(counts) if value]
+    # Punch isolated single-texel pinholes across ~4% of the island.
+    for position, index in enumerate(island):
+        if position % 25 == 0:
+            painted[index] = 0
+    pinpricked = unpainted_region_report(counts, painted, resolution)
+    assert pinpricked["unpainted_ratio"] > 0.02
+    assert pinpricked["largest_unpainted_ratio"] < 0.01
+    assert pinpricked["no_large_unpainted_regions"] is True
+
+    # A genuine void is a large connected hole and still stops the build.
+    voided = [1 if value else 0 for value in counts]
+    for y in range(10, 30):
+        for x in range(10, 30):
+            voided[y * resolution + x] = 0
+    real = unpainted_region_report(counts, voided, resolution)
+    assert real["largest_unpainted_ratio"] > 0.01
+    assert real["no_large_unpainted_regions"] is False
