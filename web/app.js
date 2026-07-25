@@ -1,7 +1,7 @@
 'use strict';
 import { GLBViewer } from './viewer.js';
 
-const REQUIRED_SERVICE_VERSION = '2.2.1';
+const REQUIRED_SERVICE_VERSION = '2.2.2';
 const CENTER_DEPTH = new Set(['head_top','neck_base','shoulder_l','shoulder_r','elbow_l','elbow_r','wrist_l','wrist_r','pelvis','hip_l','hip_r','knee_l','knee_r','ankle_l','ankle_r']);
 const REQUIRED = ['head_top','neck_base','shoulder_l','elbow_l','wrist_l','shoulder_r','elbow_r','wrist_r','pelvis','hip_l','knee_l','ankle_l','toe_l','hip_r','knee_r','ankle_r','toe_r'];
 const OPTIONAL = ['chin','eye_l','eye_r','hand_tip_l','hand_tip_r','heel_l','heel_r'];
@@ -238,17 +238,42 @@ function checkRowState(name,value){
 async function refreshReport() { if(!state.project)return; try { const report=await api(`/api/projects/${state.project.id}/report`),checks=report.post_build||report.checks||{}; const rows=flattenChecks(checks).filter(([,v])=>typeof v==='boolean'||typeof v==='number'||Array.isArray(v)); $('#buildValidation').innerHTML=rows.length?rows.map(([name,value])=>{const ok=checkRowState(name,value);return`<div class="check-row ${ok?'':'bad'}"><i></i><span><b>${escapeHtml(name.replaceAll('_',' '))}</b><br>${escapeHtml(Array.isArray(value)?JSON.stringify(value):String(value))}</span></div>`}).join(''):'<div class="notice">No strict validation report yet.</div>'; updatePipeline(report.status,checks); refreshTextureProof(checks); }
   catch(error){$('#buildValidation').innerHTML=`<div class="notice">${escapeHtml(error.message)}</div>`;}
 }
+// The proof renders are written before the texture validation gate runs, so a
+// build that FAILS validation still has them on disk. That is precisely when
+// they are needed, so the card always tries to load them and only falls back to
+// the placeholder when the service says they do not exist.
 function refreshTextureProof(checks={}) {
   const host=$('#textureProof'); if(!host)return;
   const badge=$('#textureProofBadge');
   const proven=Boolean(checks.texture_bake_passed);
-  if(badge){badge.textContent=proven?'BAKED AND VALIDATED':(checks.blender_source_created?'NOT PROVEN':'NOT RUN');badge.className=`badge ${proven?'ok':'warn'}`;}
-  const views=Array.isArray(checks.baked_material_proofs)?checks.baked_material_proofs:[];
-  if(!state.project||!views.length){host.innerHTML='<div class="notice">The baked material proof render appears here after a build. It shows the rebuilt UV atlas and the colour baked from the original high resolution GLB.</div>';return;}
+  const failures=Array.isArray(checks.texture_bake_failures)?checks.texture_bake_failures:[];
+  if(badge){
+    badge.textContent=proven?'BAKED AND VALIDATED':(failures.length?'REJECTED':'NOT RUN');
+    badge.className=`badge ${proven?'ok':(failures.length?'bad':'warn')}`;
+  }
+  if(!state.project){host.innerHTML='<div class="notice">Open a project to see its baked material proof.</div>';return;}
+  host.replaceChildren();
+  const placeholder=document.createElement('div');
+  placeholder.className='notice';
+  placeholder.textContent=failures.length
+    ? `The texture bake was rejected: ${failures.join(', ')}. The proof renders below show what was produced before it was rejected.`
+    : 'The baked material proof render appears here after a build. It shows the rebuilt UV atlas and the colour baked from the original high resolution GLB.';
+  host.append(placeholder);
   const stamp=Date.now();
-  host.innerHTML=['front','back'].filter(view=>views.some(name=>name.includes(`_${view}.`))).map(view=>
-    `<figure class="proof"><img alt="Baked material, ${view} view" src="/api/projects/${state.project.id}/texture-proof?view=${view}&t=${stamp}"><figcaption>${view.toUpperCase()}</figcaption></figure>`
-  ).join('');
+  let loaded=0;
+  for(const view of ['front','back']){
+    const figure=document.createElement('figure');
+    figure.className='proof';
+    const image=document.createElement('img');
+    image.alt=`Baked material, ${view} view`;
+    image.src=`/api/projects/${state.project.id}/texture-proof?view=${view}&t=${stamp}`;
+    image.addEventListener('error',()=>figure.remove());
+    image.addEventListener('load',()=>{ if(!loaded++ && !failures.length) placeholder.remove(); });
+    const caption=document.createElement('figcaption');
+    caption.textContent=view.toUpperCase();
+    figure.append(image,caption);
+    host.append(figure);
+  }
 }
 function updatePipeline(status,checks={}) { const done={guide:Boolean(checks.guide_locked||state.guide.locked),blender:Boolean(checks.blender_source_created),vtex:Boolean(checks.vtf_written_and_validated||checks.vtex_compiled),studio:Boolean(checks.studiomdl_compiled),runtime:status==='complete'}; $$('#pipelineStages>div').forEach(node=>{node.classList.remove('done','fail');if(done[node.dataset.stage])node.classList.add('done');else if(['texture_blocked','compile_blocked','install_blocked','runtime_failed','failed'].includes(status))node.classList.add('fail');}); }
 

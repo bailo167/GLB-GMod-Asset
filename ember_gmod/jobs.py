@@ -557,6 +557,8 @@ class JobManager:
             "uv_inside_atlas": bool(bake_checks.get("uv_inside_atlas")),
             "atlas_islands_do_not_overlap": bool(bake_checks.get("islands_do_not_overlap")),
             "every_triangle_has_bake_coverage": bool(bake_checks.get("every_triangle_has_bake_coverage")),
+            "atlas_resolution_adequate": bool(bake_checks.get("atlas_resolution_adequate")),
+            "texture_bake_failures": list(texture_bake.get("failures") or []),
             "bake_has_colour_variation": bool(bake_checks.get("bake_has_colour_variation")),
             "no_large_unpainted_regions": bool(bake_checks.get("no_large_unpainted_regions")),
             "baked_material_rendered_in_blender": bool(bake_checks.get("baked_material_rendered_in_blender")),

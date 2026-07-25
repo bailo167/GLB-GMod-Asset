@@ -15,7 +15,7 @@ def test_web_ui_contains_guided_workbench_and_strict_build_contract():
     assert "Repair Installation" in html
     assert 'id="runtimeCheckBtn"' in html
     assert 'Build + Install' in html
-    assert "REQUIRED_SERVICE_VERSION = '2.2.1'" in app
+    assert "REQUIRED_SERVICE_VERSION = '2.2.2'" in app
     assert "validateGlbHeader" in app
     assert "inspectSelectedGlb" in app
     assert "CENTER_DEPTH" in app

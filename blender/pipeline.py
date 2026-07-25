@@ -1580,6 +1580,11 @@ def rebuild_atlas_and_bake(
         f"{coverage['uncovered_measurable_triangles']} uncovered above one texel, "
         f"{coverage['uncovered_sub_texel_triangles']} uncovered below one texel."
     )
+    log(
+        f"Triangles below one texel: {coverage['sub_texel_triangles']} "
+        f"({coverage['sub_texel_ratio'] * 100:.2f}% by count, "
+        f"{coverage['sub_texel_area_ratio'] * 100:.2f}% by surface area)."
+    )
     atlas_file = persist_bake_image(image, generated / f"{slug}_baked_atlas.png")
 
     if bake_source.name in bpy.data.objects:
@@ -2378,8 +2383,30 @@ def main(config_path: Path) -> None:
     texture_size = int(options.get("texture_size", 1024))
     texture_bake = rebuild_atlas_and_bake(obj, bake_source, texture_size, float(bounds["height"]), generated, slug)
     if not texture_bake["passed"]:
+        # Write what is known before stopping. The proof renders and the atlas
+        # already exist on disk, and the Builder can only show them if a report
+        # points at them.
+        reports.joinpath("build_report.json").write_text(json.dumps({
+            "status": "texture_bake_failed",
+            "display_name": display_name,
+            "slug": slug,
+            "texture_bake": texture_bake,
+            "base_reduction": base_reduction,
+            "bounds": bounds,
+            "checks": {
+                "blender_source_created": False,
+                "texture_bake_passed": False,
+                "uv_atlas_rebuilt_on_reduced_mesh": texture_bake["atlas"]["layer"] == BAKE_UV_LAYER,
+                "original_uv_map_discarded": not texture_bake["source_uv_reused"],
+                "texture_bake_failures": texture_bake["failures"],
+                **texture_bake["checks"],
+            },
+        }, indent=2), encoding="utf-8")
+        for line in texture_bake["failure_detail"]:
+            log(f"Texture validation failure: {line}")
         raise RuntimeError(
-            "The rebuilt UV atlas and texture bake failed validation: " + json.dumps(texture_bake["failures"])
+            "The rebuilt UV atlas and texture bake failed validation. "
+            + " | ".join(texture_bake["failure_detail"])
         )
     log("Texture bake validated: new atlas, full triangle coverage and real colour variation.")
 
@@ -2507,6 +2534,7 @@ def main(config_path: Path) -> None:
             "uv_inside_atlas": texture_bake["checks"]["uv_inside_atlas"],
             "atlas_islands_do_not_overlap": texture_bake["checks"]["islands_do_not_overlap"],
             "every_triangle_has_bake_coverage": texture_bake["checks"]["every_triangle_has_bake_coverage"],
+            "atlas_resolution_adequate": texture_bake["checks"]["atlas_resolution_adequate"],
             "bake_has_colour_variation": texture_bake["checks"]["bake_has_colour_variation"],
             "no_large_unpainted_regions": texture_bake["checks"]["no_large_unpainted_regions"],
             "baked_material_rendered_in_blender": texture_bake["checks"]["baked_material_rendered_in_blender"],

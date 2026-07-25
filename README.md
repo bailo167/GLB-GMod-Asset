@@ -1,4 +1,4 @@
-# Ember Guided GMod Character Builder 2.2.1
+# Ember Guided GMod Character Builder 2.2.2
 
 A local Windows workbench for turning a humanoid GLB into a guided Garry's Mod player model and spawnable ragdoll.
 
@@ -93,7 +93,7 @@ retries with a larger projection envelope before it gives up.
 | `atlas_islands_do_not_overlap` | Summed UV area matches the atlas area the islands actually occupy |
 | `atlas_usage_sufficient` | The atlas is not collapsed into a pinhole |
 | `every_triangle_has_bake_coverage` | Every mesh triangle samples baked texels, not empty atlas |
-| `atlas_resolution_adequate` | No more than one triangle in ten is smaller than a texel |
+| `atlas_resolution_adequate` | No more than a quarter of the surface area is in triangles smaller than a texel |
 | `bake_has_colour_variation` | The bake holds real colour, not one flat fill |
 | `no_large_unpainted_regions` | No hole inside the islands |
 | `baked_material_rendered_in_blender` | Front and back renders of the baked material are produced |
@@ -130,8 +130,15 @@ Coverage is now measured per population:
 * **Below one texel** — measured against the texels beside it, because that is what the
   triangle samples when rendered. Counted and reported as `sub_texel_triangles`.
 
-If more than one triangle in ten is sub texel, the texture size is too small for the mesh
-and the build stops with `atlas_resolution_adequate`.
+Atlas adequacy is judged by surface area, not by triangle count. The target character had
+3,227 of 32,000 triangles below one texel, which is 10.08% by count but 0.685% of the
+surface. A decimated mesh always has a long tail of small triangles, and counting them says
+nothing about how the model looks. The build stops on `atlas_resolution_adequate` only when
+more than a quarter of the surface cannot own a texel, which does mean the texture size is
+too small.
+
+Every failure names the measurement that caused it, and a rejected bake still writes its
+report and proof renders so they can be inspected in the Builder.
 
 The atlas is also dilated outward from every painted island before export rather than
 having its gaps flattened to one average colour, so isolated slivers take the colour of the

@@ -65,7 +65,7 @@ def parse_multipart(headers, body: bytes) -> tuple[dict[str, str], dict[str, tup
 
 
 class Handler(BaseHTTPRequestHandler):
-    server_version = "EmberGModBuilder/2.2.1"
+    server_version = "EmberGModBuilder/2.2.2"
 
     def log_message(self, fmt: str, *args: Any) -> None:
         sys.stdout.write("[HTTP] " + fmt % args + "\n")
@@ -108,7 +108,7 @@ class Handler(BaseHTTPRequestHandler):
                 cfg = CONFIG_STORE.load()
                 self.send_json({
                     "name": "Ember Guided GMod Character Builder",
-                    "version": "2.2.1",
+                    "version": "2.2.2",
                     "workspace": str(WORKSPACE),
                     "toolchain": tool_status(cfg),
                 })
@@ -185,7 +185,7 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 project_matches = str(result.get("project_id", "")) == record.id
                 build_matches = bool(record.last_job_id) and str(result.get("build_token", "")) == str(record.last_job_id)
-                version_matches = str(result.get("version", "")) == "2.2.1"
+                version_matches = str(result.get("version", "")) == "2.2.2"
                 result["project_matches"] = project_matches
                 result["build_matches"] = build_matches
                 result["version_matches"] = version_matches

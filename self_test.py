@@ -209,7 +209,7 @@ class EmberV2SelfTest(unittest.TestCase):
         self.assertIn('id="glCanvas"', html)
         self.assertIn('id="landmarkList"', html)
         self.assertIn('id="lockGuideBtn"', html)
-        self.assertIn("REQUIRED_SERVICE_VERSION = '2.2.1'", app)
+        self.assertIn("REQUIRED_SERVICE_VERSION = '2.2.2'", app)
         self.assertIn("raycast", viewer)
         self.assertIn("autoSeed", viewer)
 

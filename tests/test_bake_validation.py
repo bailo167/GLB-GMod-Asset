@@ -150,23 +150,44 @@ def test_a_few_sub_texel_slivers_do_not_fail_an_otherwise_covered_mesh():
     painted = [1] * (resolution * resolution)
     report = triangle_coverage_report(triangles, painted, resolution)
     assert report["sub_texel_triangles"] == 1
-    assert report["sub_texel_ratio"] < 0.10
     assert report["measurable_coverage_ratio"] == 1.0
+    assert report["every_triangle_has_bake_coverage"] is True
+    assert report["atlas_resolution_adequate"] is True
+
+
+def test_sub_texel_adequacy_is_judged_by_surface_area_not_triangle_count():
+    # The real build had 3227 of 32000 triangles below one texel, 10.08% by
+    # count, but well under 1% of the surface. Counting them stopped a build
+    # whose measurable coverage was 99.979%.
+    resolution = 64
+    triangles = []
+    for index in range(9):
+        triangles.extend(square(0.02 + index * 0.1, 0.05, 0.09))
+    sliver = 0.3 / resolution
+    for index in range(30):
+        base = 0.02 + index * 0.03
+        triangles.append(((base, 0.8), (base + sliver, 0.8), (base + sliver, 0.8 + sliver)))
+    painted = [1] * (resolution * resolution)
+    report = triangle_coverage_report(triangles, painted, resolution)
+    assert report["sub_texel_ratio"] > 0.10          # a sixth of the triangles
+    assert report["sub_texel_area_ratio"] < 0.01     # but a rounding error of the surface
+    assert report["atlas_resolution_adequate"] is True
     assert report["every_triangle_has_bake_coverage"] is True
 
 
-def test_a_mesh_that_is_mostly_sub_texel_fails_as_too_small_an_atlas():
-    resolution = 32
-    sliver = 0.2 / resolution
+def test_an_atlas_genuinely_too_small_for_the_mesh_is_rejected():
+    resolution = 16
+    sliver = 0.4 / resolution
     triangles = [
-        ((x / 40.0, 0.5), (x / 40.0 + sliver, 0.5), (x / 40.0 + sliver, 0.5 + sliver))
-        for x in range(30)
-    ] + square(0.05, 0.05, 0.3)
+        ((0.05 + (index % 8) * 0.11, 0.05 + (index // 8) * 0.11),
+         (0.05 + (index % 8) * 0.11 + sliver, 0.05 + (index // 8) * 0.11),
+         (0.05 + (index % 8) * 0.11 + sliver, 0.05 + (index // 8) * 0.11 + sliver))
+        for index in range(40)
+    ] + square(0.5, 0.5, 0.05)
     painted = [1] * (resolution * resolution)
     report = triangle_coverage_report(triangles, painted, resolution)
-    assert report["sub_texel_ratio"] > 0.10
+    assert report["sub_texel_area_ratio"] > 0.25
     assert report["atlas_resolution_adequate"] is False
-    assert report["every_triangle_has_bake_coverage"] is False
 
 
 def test_a_real_bake_miss_still_fails_even_with_neighbourhood_tolerance():
@@ -227,18 +248,19 @@ def test_evaluate_bake_lists_every_failing_rule():
     passing = evaluate_bake(
         {"all_finite": True, "inside_atlas": True},
         {"islands_do_not_overlap": True, "atlas_usage_sufficient": True},
-        {"every_triangle_has_bake_coverage": True},
+        {"every_triangle_has_bake_coverage": True, "atlas_resolution_adequate": True},
         {"has_colour_variation": True},
         {"no_large_unpainted_regions": True},
         True,
     )
     assert passing["passed"] is True
     assert passing["failures"] == []
+    assert passing["failure_detail"] == []
 
     failing = evaluate_bake(
         {"all_finite": True, "inside_atlas": False},
         {"islands_do_not_overlap": False, "atlas_usage_sufficient": True},
-        {"every_triangle_has_bake_coverage": True},
+        {"every_triangle_has_bake_coverage": True, "atlas_resolution_adequate": True},
         {"has_colour_variation": False},
         {"no_large_unpainted_regions": True},
         False,
@@ -250,3 +272,44 @@ def test_evaluate_bake_lists_every_failing_rule():
         "bake_has_colour_variation",
         "baked_material_rendered_in_blender",
     }
+
+
+def test_a_small_atlas_does_not_report_the_coverage_rule_as_the_failure():
+    # The 2.2.1 build failed with ["every_triangle_has_bake_coverage"] when the
+    # coverage rule had in fact passed at 99.979%. The two rules are separate.
+    verdict = evaluate_bake(
+        {"all_finite": True, "inside_atlas": True},
+        {"islands_do_not_overlap": True, "atlas_usage_sufficient": True},
+        {
+            "every_triangle_has_bake_coverage": True,
+            "atlas_resolution_adequate": False,
+            "sub_texel_area_ratio": 0.4,
+            "sub_texel_triangles": 3227,
+        },
+        {"has_colour_variation": True},
+        {"no_large_unpainted_regions": True},
+        True,
+    )
+    assert verdict["failures"] == ["atlas_resolution_adequate"]
+    assert "40.000%" in verdict["failure_detail"][0]
+    assert "3227" in verdict["failure_detail"][0]
+
+
+def test_failure_detail_carries_the_measurement_that_tripped_each_rule():
+    verdict = evaluate_bake(
+        {"all_finite": True, "inside_atlas": True, "count": 96000},
+        {"islands_do_not_overlap": True, "atlas_usage_sufficient": True},
+        {
+            "every_triangle_has_bake_coverage": False,
+            "atlas_resolution_adequate": True,
+            "measurable_triangles": 28773,
+            "uncovered_measurable_triangles": 900,
+            "measurable_coverage_ratio": 0.9687,
+        },
+        {"has_colour_variation": True},
+        {"no_large_unpainted_regions": True},
+        True,
+    )
+    detail = verdict["failure_detail"][0]
+    assert "900 of 28773" in detail
+    assert "96.870%" in detail

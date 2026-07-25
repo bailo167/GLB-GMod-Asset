@@ -128,6 +128,27 @@ def test_the_baked_atlas_survives_reopening_the_saved_blender_source():
     assert PIPELINE.index("atlas_file = persist_bake_image(") < PIPELINE.index("bpy.ops.wm.save_as_mainfile")
 
 
+def test_a_failed_texture_bake_still_writes_a_report_and_names_the_real_rule():
+    # A build that stops at the gate has already written the atlas and both proof
+    # renders. Without a report the Builder cannot point at them.
+    section = PIPELINE[PIPELINE.index('if not texture_bake["passed"]:'):PIPELINE.index("animation_base = options.get")]
+    assert '"status": "texture_bake_failed"' in section
+    assert 'reports.joinpath("build_report.json").write_text' in section
+    assert '"texture_bake_failures": texture_bake["failures"]' in section
+    assert 'texture_bake["failure_detail"]' in section
+    assert "atlas_resolution_adequate" in PIPELINE
+    assert "atlas_resolution_adequate" in JOBS
+
+
+def test_the_proof_card_loads_renders_even_when_validation_rejected_the_bake():
+    section = APP_JS[APP_JS.index("function refreshTextureProof"):APP_JS.index("async function refreshFiles")]
+    assert "texture_bake_failures" in section
+    # No dependency on a passing report: the images are always requested and the
+    # figure removes itself if the service has none.
+    assert "addEventListener('error'" in section
+    assert "texture-proof?view=" in section
+
+
 def test_texture_bake_results_are_reported_to_the_builder_interface():
     for key in (
         "uv_atlas_rebuilt_on_reduced_mesh",

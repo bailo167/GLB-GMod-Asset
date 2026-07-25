@@ -1,4 +1,4 @@
-# Ember Guided Character Builder 2.2.1 verification
+# Ember Guided Character Builder 2.2.2 verification
 
 Date: 25 July 2026
 
@@ -63,6 +63,25 @@ units. Those triangles are around two millimetres across and cannot be seen. The
 measured against the texels beside them now, and the atlas is dilated so those texels carry
 the neighbouring surface colour rather than a flat average.
 
+## 2.2.2: the gate blamed the wrong rule
+
+The 2.2.1 build recovered almost everything the sub texel rule was written for:
+
+```text
+Shipped atlas coverage: 99.697% of triangles, 6 uncovered above one texel, 91 below
+sub_texel_triangles: 3227 of 32000
+RuntimeError: ... failed validation: ["every_triangle_has_bake_coverage"]
+```
+
+Measurable coverage was 99.979%, comfortably above the 99.5% rule, so the named rule had
+passed. The build was stopped by an adequacy heuristic folded inside it: 3227/32000 is
+10.08%, against a 10% limit chosen without evidence.
+
+Counting triangles was the mistake. Those 3,227 triangles occupy at most 3,227 texels of a
+1024 atlas at 44.9% usage, which is 0.685% of the surface. Adequacy is now measured by area
+with a 25% limit, the two rules are reported separately, and every failure carries its
+measurement.
+
 ## Validation rules
 
 Every rule lives in `blender/bake_validation.py`, which imports no Blender modules and is
@@ -86,7 +105,7 @@ triangles.
 
 ## Automated results
 
-* Development tests: 73 passed
+* Development tests: 78 passed
 * Bundled standard library self test: 12 passed
 * Python syntax checks: passed
 * `web/app.js` ES module syntax check: passed
