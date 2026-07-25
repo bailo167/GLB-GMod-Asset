@@ -1,0 +1,223 @@
+<!doctype html>
+<!--
+EMBER TOOL META
+name: Ember Guided GMod Character Builder
+slug: ember-guided-gmod-character-builder
+category: 3D Pipeline
+version: 2.2.0
+status: guided-workbench
+updated: 2026-07-25
+offline: true
+storage: local project workspace
+layout: workbench
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self' blob: data:; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'">
+  <title>Ember Guided GMod Character Builder</title>
+  <script type="application/json" id="ember-tool-meta">
+  {"name":"Ember Guided GMod Character Builder","slug":"ember-guided-gmod-character-builder","category":"3D Pipeline","summary":"Guided GLB landmark rigging and native Garry's Mod player model compilation.","description":"A Windows local workbench for orienting a humanoid GLB, assigning body landmarks, fitting ValveBiped, compiling native Source materials and models, installing the addon, and validating it inside Garry's Mod.","version":"2.2.0","status":"guided-workbench","updated":"2026-07-25","offline":true,"storage":"local project workspace","tags":["gmod","glb","valvebiped","blender","guided-rigging","windows"],"entry":"start.bat","layout":"workbench"}
+  </script>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="rail">
+      <div class="brand"><span>EMBER</span><strong>GUIDED<br>CHARACTER<br>BUILDER</strong><small>GLB → GARRY'S MOD</small></div>
+      <nav id="stageNav" aria-label="Builder stages">
+        <button class="nav-item active" data-panel="import"><b>01</b><span>Import</span></button>
+        <button class="nav-item" data-panel="guide"><b>02</b><span>Guide Rig</span></button>
+        <button class="nav-item" data-panel="build"><b>03</b><span>Build</span></button>
+        <button class="nav-item" data-panel="projects"><b>04</b><span>Projects</span></button>
+        <button class="nav-item" data-panel="toolchain"><b>05</b><span>Toolchain</span></button>
+      </nav>
+      <div class="rail-status">
+        <span id="serviceDot" class="dot warn"></span>
+        <div><b id="serviceLabel">Connecting</b><small>Local Windows service</small></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="crumb"><b>EMBER</b> / GUIDED PIPELINE / <span id="crumbStage">IMPORT</span></div>
+        <div class="top-status">
+          <span class="status" id="blenderStatus">Blender …</span>
+          <span class="status" id="vtexStatus">VTF writer …</span>
+          <span class="status" id="compilerStatus">StudioMDL …</span>
+          <span class="status" id="activeProjectStatus">No project</span>
+        </div>
+      </header>
+
+      <section class="panel-page active" id="panel-import">
+        <div class="page-head">
+          <div><span class="eyebrow">Stage 01</span><h1>LOAD THE GLB.</h1><p>Import a humanoid GLB, confirm its facing direction and create a guided project. Nothing is rigged until you mark the body.</p></div>
+          <div class="truth-card"><b>NO FALSE COMPLETE STATE</b><p>The tool will only mark a project complete after deterministic VTF generation, StudioMDL, verified installation and the in game Garry's Mod runtime check all pass.</p></div>
+        </div>
+        <div class="import-grid">
+          <article class="card upload-card" id="dropZone">
+            <input id="glbInput" type="file" accept=".glb,model/gltf-binary" hidden>
+            <div class="upload-icon">GLB</div>
+            <h2>SELECT HUMANOID GLB</h2>
+            <p>Drag a file here or select it from disk. The upload remains inside the local service.</p>
+            <button class="btn primary" id="selectGlbBtn" type="button">Select GLB</button>
+            <div id="importStatus" class="file-status">No GLB selected.</div>
+          </article>
+          <article class="card form-card">
+            <div class="form-grid">
+              <label>Character name<input id="displayName" value="Guided Character" maxlength="80"></label>
+              <label>Internal ID<input id="slug" value="guided_character" maxlength="48"></label>
+              <label>Animation base<select id="animationBase"><option value="male">Male m_anm</option><option value="female">Female f_anm</option></select></label>
+              <label>Facing in original GLB<select id="frontAxis"><option value="neg_y">Faces negative Y, Hunyuan common</option><option value="pos_y">Faces positive Y</option><option value="pos_x">Faces positive X</option><option value="neg_x">Faces negative X</option></select></label>
+              <label>Source height, inches<input id="targetHeight" type="number" min="36" max="120" step="1" value="72"></label>
+              <label>Build quality<select id="quality"><option value="fast">Fast, 18K triangles</option><option value="good" selected>Good, 32K triangles</option><option value="workshop">Workshop, 48K triangles</option></select></label>
+              <label>Texture size<select id="textureSize"><option>512</option><option selected>1024</option><option>2048</option></select></label>
+              <label class="check"><input id="packageGma" type="checkbox" checked><span>Create GMA package</span></label>
+            </div>
+            <div class="actions"><button class="btn" id="inspectBtn" disabled>Inspect GLB</button><button class="btn primary" id="createProjectBtn" disabled>Create Guided Project</button></div>
+          </article>
+        </div>
+        <article class="card inspection-card">
+          <div class="card-head"><h2>GLB INSPECTION</h2><span id="inspectionBadge" class="badge">WAITING</span></div>
+          <div id="inspectionMetrics" class="metrics"><div><small>Meshes</small><b>—</b></div><div><small>Triangles</small><b>—</b></div><div><small>Materials</small><b>—</b></div><div><small>Textures</small><b>—</b></div><div><small>Existing rig</small><b>—</b></div></div>
+          <div id="inspectionMessage" class="notice">Select a GLB to inspect its structure.</div>
+        </article>
+      </section>
+
+      <section class="panel-page" id="panel-guide">
+        <div class="guide-header">
+          <div><span class="eyebrow">Stage 02</span><h1>MARK THE BODY.</h1><p id="guideSubtitle">Load a project, then assign the required landmarks directly on the mesh.</p></div>
+          <div class="guide-actions">
+            <button class="btn primary" id="reviewPointsBtn">Review 17 Points</button>
+            <button class="btn" id="autoSeedBtn">Auto Seed</button>
+            <button class="btn" id="clearGuideBtn">Clear</button>
+            <button class="btn" id="saveGuideBtn">Save Guide</button>
+            <button class="btn primary" id="lockGuideBtn">Validate and Lock</button>
+          </div>
+        </div>
+        <div class="workbench">
+          <aside class="landmark-panel card">
+            <div class="card-head"><h2>LANDMARKS</h2><span id="landmarkProgress" class="badge">0 / 17</span></div>
+            <p class="small-copy">Use Review 17 Points for a guided click sequence, or choose any landmark manually. Model left is the character's left.</p>
+            <div class="landmark-groups" id="landmarkList"></div>
+          </aside>
+
+          <div class="viewport-wrap">
+            <div class="viewport-toolbar">
+              <div class="tool-group"><button data-view="front">Front</button><button data-view="left">Left</button><button data-view="right">Right</button><button data-view="back">Back</button><button data-view="top">Top</button></div>
+              <div class="tool-group"><button data-mode="textured" class="active">Texture</button><button data-mode="solid">Solid</button><button data-mode="wire">Wire</button></div>
+              <span>Drag orbit · Shift drag pan · Wheel zoom · Click assign</span>
+            </div>
+            <div class="viewport" id="viewport">
+              <canvas id="glCanvas"></canvas>
+              <svg id="skeletonOverlay" class="skeleton-overlay"></svg>
+              <div id="markerLayer" class="marker-layer"></div>
+              <div id="viewportEmpty" class="viewport-empty"><b>NO PROJECT LOADED</b><span>Create or open a guided project.</span></div>
+            </div>
+            <div class="viewport-footer"><span id="activeLandmarkLabel">Select a landmark</span><span id="cursorCoordinate">X — / Y — / Z —</span></div>
+          </div>
+
+          <aside class="inspector card">
+            <div class="card-head"><h2>GUIDE INSPECTOR</h2><span id="guideStateBadge" class="badge warn">UNLOCKED</span></div>
+            <div class="selected-landmark">
+              <small>Selected landmark</small><b id="selectedLandmarkName">None</b>
+              <div class="coord-grid"><label>X<input id="coordX" type="number" step="0.01"></label><label>Y<input id="coordY" type="number" step="0.01"></label><label>Z<input id="coordZ" type="number" step="0.01"></label></div>
+              <div class="actions tight"><button class="btn small" id="applyCoordsBtn">Apply Coordinates</button><button class="btn small" id="centerDepthBtn">Center Depth</button><button class="btn small" id="mirrorBtn">Mirror Pair</button><button class="btn small danger" id="removePointBtn">Remove</button></div><p class="small-copy depth-note">Body joint clicks automatically use the character centre depth. Use side view or coordinates for eyes, chin, toes and accessory zones.</p>
+            </div>
+            <div class="divider"></div>
+            <h3>RIGID ACCESSORY ZONES</h3>
+            <p class="small-copy">Add a spherical zone for helmets, pouches or armour that must follow one bone without bending.</p>
+            <label>Target bone<select id="rigidBone"><option>ValveBiped.Bip01_Head1</option><option>ValveBiped.Bip01_Spine4</option><option>ValveBiped.Bip01_Spine2</option><option>ValveBiped.Bip01_Pelvis</option><option>ValveBiped.Bip01_L_UpperArm</option><option>ValveBiped.Bip01_R_UpperArm</option><option>ValveBiped.Bip01_L_Thigh</option><option>ValveBiped.Bip01_R_Thigh</option></select></label>
+            <label>Radius, inches<input id="rigidRadius" type="number" min="0.25" max="24" value="3" step="0.25"></label>
+            <button class="btn" id="addRigidZoneBtn">Use Selected Point as Zone</button>
+            <div id="rigidZoneList" class="zone-list"></div>
+            <div class="divider"></div>
+            <h3>VALIDATION</h3>
+            <div id="guideValidation" class="validation-list"><div class="notice">Assign all required landmarks.</div></div>
+          </aside>
+        </div>
+      </section>
+
+      <section class="panel-page" id="panel-build">
+        <div class="page-head compact">
+          <div><span class="eyebrow">Stage 03</span><h1>BUILD AND PROVE IT.</h1><p>Generate a region weighted ValveBiped rig, run the deformation probe, compile the model, install it automatically, then read the in game runtime result.</p></div>
+          <div class="actions"><button class="btn primary" id="runBuildBtn">Build + Install</button><button class="btn" id="installBtn">Repair Installation</button><button class="btn" id="runtimeCheckBtn">Read GMod Runtime Check</button></div>
+        </div>
+        <div class="pipeline" id="pipelineStages">
+          <div data-stage="guide"><b>01</b><span>Guide</span><small>Locked landmarks</small></div>
+          <div data-stage="blender"><b>02</b><span>Blender</span><small>Rig, weights, LOD and physics</small></div>
+          <div data-stage="vtex"><b>03</b><span>VTF</span><small>Deterministic Source textures</small></div>
+          <div data-stage="studio"><b>04</b><span>StudioMDL</span><small>Player model binaries</small></div>
+          <div data-stage="runtime"><b>05</b><span>GMod</span><small>Materials, animations and registration</small></div>
+        </div>
+        <div class="build-grid">
+          <article class="card build-card">
+            <div class="card-head"><h2>LIVE BUILD</h2><span id="buildState" class="badge">IDLE</span></div>
+            <div class="progress"><i id="buildProgress"></i></div>
+            <div id="buildPhase" class="notice">Open a locked guided project.</div>
+            <pre id="buildLog" class="console">No build running.</pre>
+          </article>
+          <article class="card validation-card">
+            <div class="card-head"><h2>STRICT VALIDATION</h2><button class="btn small" id="refreshReportBtn">Refresh</button></div>
+            <div id="buildValidation" class="validation-list"><div class="notice">No validation report.</div></div>
+          </article>
+        </div>
+        <article class="card proof-card">
+          <div class="card-head"><h2>BAKED TEXTURE PROOF</h2><span id="textureProofBadge" class="badge warn">NOT RUN</span></div>
+          <p class="small-copy">V2.2 discards the imported UV map, builds a new non overlapping atlas on the reduced mesh, then bakes the colour from the untouched high resolution GLB onto it. These renders are produced in Blender before StudioMDL runs.</p>
+          <div id="textureProof" class="proof-grid"><div class="notice">The baked material proof render appears here after a build.</div></div>
+        </article>
+        <article class="card runtime-card">
+          <div class="card-head"><h2>GARRY'S MOD RUNTIME RESULT</h2><span id="runtimeBadge" class="badge warn">NOT RUN</span></div>
+          <div id="runtimeResult" class="runtime-grid"><div class="notice">After installation and restart, enter Sandbox. The addon automatically checks the model, materials, core bones, movement activities, player selector registration and spawnable ragdoll.</div></div>
+        </article>
+        <article class="card files-card">
+          <div class="card-head"><h2>PROJECT OUTPUT</h2><div class="actions tight"><button class="btn small" id="refreshFilesBtn">Refresh</button><button class="btn small" id="downloadBtn">Download Output ZIP</button></div></div>
+          <div id="fileList" class="file-list"><div class="notice">No output yet.</div></div>
+        </article>
+      </section>
+
+      <section class="panel-page" id="panel-projects">
+        <div class="page-head compact"><div><span class="eyebrow">Stage 04</span><h1>PROJECTS.</h1><p>Every project preserves the original GLB, guide, Blender source, compile source, addon and reports.</p></div><button class="btn primary" data-go="import">New Project</button></div>
+        <div id="projectList" class="project-list"><div class="notice">Loading projects.</div></div>
+      </section>
+
+      <section class="panel-page" id="panel-toolchain">
+        <div class="page-head compact"><div><span class="eyebrow">Stage 05</span><h1>WINDOWS TOOLCHAIN.</h1><p>Paths are auto detected where possible. V2.2.0 writes validated Source VTF files internally, compiles with StudioMDL and installs the verified addon automatically.</p></div></div>
+        <div class="toolchain-grid">
+          <article class="card form-card">
+            <label>Blender executable<input id="cfgBlender" placeholder="C:\Program Files\Blender Foundation\...\blender.exe"></label>
+            <label>VTEX executable<input id="cfgVtex" placeholder="...\GarrysMod\bin\vtex.exe"></label>
+            <label>StudioMDL executable<input id="cfgStudiomdl" placeholder="...\GarrysMod\bin\studiomdl.exe"></label>
+            <label>GMad executable<input id="cfgGmad" placeholder="...\GarrysMod\bin\gmad.exe"></label>
+            <label>Garry's Mod game directory<input id="cfgGameDir" placeholder="...\GarrysMod\garrysmod"></label>
+            <button class="btn primary" id="saveToolchainBtn">Save Toolchain</button>
+          </article>
+          <article class="card">
+            <div class="card-head"><h2>READINESS</h2><button class="btn small" id="refreshToolchainBtn">Refresh</button></div>
+            <div id="toolchainReadiness" class="validation-list"></div>
+            <div class="notice warning"><b>Required:</b> Windows, Python 3.10 or newer, Blender 4.2 or newer and Garry's Mod installed through Steam. StudioMDL and GMad come from the local Garry's Mod installation. VTEX remains optional and is not used by automatic builds.</div>
+          </article>
+        </div>
+      </section>
+
+      <footer>Ember Guided GMod Character Builder v2.2.0 · Windows local service · No remote requests · Workspace storage</footer>
+    </main>
+  </div>
+  <div id="toastStack" class="toast-stack" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+  <!--
+  EMBER SELF-AUDIT
+  [x] Windows local web application
+  [x] Offline after dependencies are installed
+  [x] No external web dependencies
+  [x] Guided landmark workbench
+  [x] Deterministic VTF, deformation probe and StudioMDL stages
+  [x] Project persistence and migration capable
+  [x] Spawnable ragdoll and player registration
+  [x] Strict runtime validation required
+  [x] Responsive workbench UI
+  -->
+</body>
+</html>

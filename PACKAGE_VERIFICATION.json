@@ -1,0 +1,39 @@
+{
+  "product": "Ember Guided GMod Character Builder",
+  "version": "2.2.0",
+  "status": "uv-atlas-rebuild-and-texture-bake",
+  "built": "2026-07-25",
+  "verified": {
+    "python_development_tests_passed": 65,
+    "bundled_standard_library_tests_passed": 12,
+    "python_syntax": true,
+    "web_app_module_syntax": true,
+    "high_resolution_copy_taken_before_reduction": true,
+    "imported_uv_layers_discarded": true,
+    "new_atlas_generated_on_reduced_mesh": true,
+    "cycles_selected_to_active_diffuse_bake": true,
+    "bake_retries_with_larger_projection_envelope": true,
+    "uv_finite_and_inside_atlas_rules": true,
+    "island_overlap_rule_ignores_shared_edges": true,
+    "triangle_bake_coverage_rule": true,
+    "colour_variation_rule": true,
+    "unpainted_region_rule": true,
+    "material_rendered_before_studiomdl": true,
+    "bake_sentinel_never_exported": true,
+    "lod_uv_seams_split_before_reduction": true,
+    "compiled_files_row_green_when_populated": true,
+    "stub_blender_bake_stage_executed": true,
+    "exact_stock_smd_bind": true,
+    "maximum_vertex_influences": 3,
+    "internal_vtf_full_readback": true,
+    "synthetic_verified_install": true,
+    "workspace_preservation_hotfix_test": true
+  },
+  "runtime_boundary": {
+    "target_windows_blender_executed_here": false,
+    "real_cycles_bake_executed_here": false,
+    "target_studiomdl_executed_here": false,
+    "target_garrys_mod_executed_here": false,
+    "actual_target_model_runtime_passed": false
+  }
+}
