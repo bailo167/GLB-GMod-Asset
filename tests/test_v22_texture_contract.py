@@ -88,9 +88,34 @@ def test_lod_reduction_protects_the_new_atlas_seams():
 
 
 def test_the_sentinel_never_reaches_the_exported_texture():
-    section = PIPELINE[PIPELINE.index("def flatten_unpainted"):PIPELINE.index("def render_material_proof")]
+    section = PIPELINE[PIPELINE.index("def flatten_unpainted"):PIPELINE.index("def persist_bake_image")]
     assert "values[base + 3] = 1.0" in section
-    assert "flattened = flatten_unpainted(image, painted)" in PIPELINE
+    assert "flattened = flatten_unpainted(image, painted, dilation_passes)" in PIPELINE
+
+
+def test_the_atlas_is_dilated_before_the_shipped_coverage_is_measured():
+    # The verdict has to describe the texture that ships, after the bake margin
+    # and the dilation have grown colour outward from every painted island.
+    dilate = PIPELINE.index("flattened = flatten_unpainted(image, painted, dilation_passes)")
+    shipped = PIPELINE.index('shipped = flattened.pop("mask")')
+    measure = PIPELINE.index("coverage = triangle_coverage_report(triangles, shipped, texture_size, neighbourhood=1)")
+    verdict = PIPELINE.index("verdict = evaluate_bake(")
+    assert dilate < shipped < measure < verdict
+
+
+def test_the_retry_loop_reads_the_raw_bake_and_stops_when_escalation_stops_helping():
+    section = PIPELINE[PIPELINE.index("def rebuild_atlas_and_bake"):PIPELINE.index("def safe_material_name")]
+    assert "triangle_coverage_report(triangles, painted, texture_size, neighbourhood=0)" in section
+    assert 'attempts[-1]["uncovered_measurable_triangles"] >= attempts[-2]["uncovered_measurable_triangles"]' in section
+
+
+def test_deprecated_use_nodes_is_not_read_on_blender_5_or_newer():
+    # Blender 5.x warns on Material.use_nodes and 6.0 removes it. Reading
+    # node_tree first keeps 4.x working without touching the deprecated flag.
+    helper = PIPELINE[PIPELINE.index("def material_node_tree"):PIPELINE.index("def assign_baked_material")]
+    assert "material.use_nodes = True" in helper
+    # The single write inside the helper is the only mention anywhere.
+    assert PIPELINE.count("use_nodes") == helper.count("use_nodes")
 
 
 def test_the_baked_atlas_survives_reopening_the_saved_blender_source():
@@ -101,6 +126,27 @@ def test_the_baked_atlas_survives_reopening_the_saved_blender_source():
     assert "image.save()" in section
     assert "image.pack()" in section
     assert PIPELINE.index("atlas_file = persist_bake_image(") < PIPELINE.index("bpy.ops.wm.save_as_mainfile")
+
+
+def test_a_failed_texture_bake_still_writes_a_report_and_names_the_real_rule():
+    # A build that stops at the gate has already written the atlas and both proof
+    # renders. Without a report the Builder cannot point at them.
+    section = PIPELINE[PIPELINE.index('if not texture_bake["passed"]:'):PIPELINE.index("animation_base = options.get")]
+    assert '"status": "texture_bake_failed"' in section
+    assert 'reports.joinpath("build_report.json").write_text' in section
+    assert '"texture_bake_failures": texture_bake["failures"]' in section
+    assert 'texture_bake["failure_detail"]' in section
+    assert "atlas_resolution_adequate" in PIPELINE
+    assert "atlas_resolution_adequate" in JOBS
+
+
+def test_the_proof_card_loads_renders_even_when_validation_rejected_the_bake():
+    section = APP_JS[APP_JS.index("function refreshTextureProof"):APP_JS.index("async function refreshFiles")]
+    assert "texture_bake_failures" in section
+    # No dependency on a passing report: the images are always requested and the
+    # figure removes itself if the service has none.
+    assert "addEventListener('error'" in section
+    assert "texture-proof?view=" in section
 
 
 def test_texture_bake_results_are_reported_to_the_builder_interface():

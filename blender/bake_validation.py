@@ -32,6 +32,16 @@ MIN_DISTINCT_COLOURS = 8
 MAX_UNPAINTED_ISLAND_RATIO = 0.02
 MAX_LARGEST_UNPAINTED_RATIO = 0.01
 MIN_ATLAS_USAGE_RATIO = 0.05
+# A triangle whose UV footprint is smaller than one texel cannot own a texel:
+# the baker rasterizes nothing for it and never casts a ray. Such a triangle is
+# measured against the texels immediately around it instead, because that is
+# what it samples in game.
+MIN_MEASURABLE_TEXELS = 1.0
+# Judged by surface area, not by triangle count. A decimated scan always has a
+# long tail of small triangles, and counting them says nothing about how the
+# model looks: 10% of the triangles can easily be well under 1% of the surface.
+# What matters is how much of the surface is too small to own a texel.
+MAX_SUB_TEXEL_AREA_RATIO = 0.25
 
 
 def _finite(value: float) -> bool:
@@ -77,18 +87,20 @@ def uv_bounds_report(uvs: Iterable[Uv], tolerance: float = 1e-4) -> dict[str, An
     }
 
 
+def triangle_uv_area(triangle: Triangle) -> float:
+    """UV area of one triangle as a fraction of the atlas, 0 if degenerate."""
+    try:
+        (x0, y0), (x1, y1), (x2, y2) = ((float(p[0]), float(p[1])) for p in triangle)
+    except (TypeError, ValueError):
+        return 0.0
+    if not all(_finite(value) for value in (x0, y0, x1, y1, x2, y2)):
+        return 0.0
+    return abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)) * 0.5
+
+
 def total_uv_area(triangles: Iterable[Triangle]) -> float:
     """Exact summed UV area of every triangle, as a fraction of the atlas."""
-    total = 0.0
-    for triangle in triangles:
-        try:
-            (x0, y0), (x1, y1), (x2, y2) = ((float(p[0]), float(p[1])) for p in triangle)
-        except (TypeError, ValueError):
-            continue
-        if not all(_finite(value) for value in (x0, y0, x1, y1, x2, y2)):
-            continue
-        total += abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)) * 0.5
-    return total
+    return sum(triangle_uv_area(triangle) for triangle in triangles)
 
 
 def rasterize_triangles(triangles: Iterable[Triangle], resolution: int) -> list[int]:
@@ -181,36 +193,83 @@ def _sample_points(triangle: Triangle) -> list[tuple[float, float]]:
     return points
 
 
+def _painted_at(painted: Sequence[int], resolution: int, u: float, v: float, radius: int) -> bool:
+    if not (_finite(u) and _finite(v)):
+        return False
+    px = int(min(1.0, max(0.0, u)) * (resolution - 1))
+    py = int(min(1.0, max(0.0, v)) * (resolution - 1))
+    for offset_y in range(-radius, radius + 1):
+        y = py + offset_y
+        if y < 0 or y >= resolution:
+            continue
+        row = y * resolution
+        for offset_x in range(-radius, radius + 1):
+            x = px + offset_x
+            if x < 0 or x >= resolution:
+                continue
+            index = row + x
+            if index < len(painted) and painted[index]:
+                return True
+    return False
+
+
 def triangle_coverage_report(
     triangles: Sequence[Triangle],
     painted: Sequence[int],
     resolution: int,
+    neighbourhood: int = 1,
 ) -> dict[str, Any]:
-    """Prove every mesh triangle samples baked pixels rather than empty atlas."""
+    """Prove every mesh triangle samples baked pixels rather than empty atlas.
+
+    Triangles are split into two populations.  A triangle with at least one
+    texel of UV footprint must hit painted texels directly: if it does not, the
+    bake genuinely failed to reach that part of the surface and the build has to
+    stop.  A triangle smaller than a texel cannot own one, so no ray is ever cast
+    for it; it is measured against the texels around its centroid, which is
+    exactly what it samples when the model is rendered.
+    """
     resolution = max(8, int(resolution))
     total = len(triangles)
-    uncovered = 0
+    texels = float(resolution) * float(resolution)
+    measurable = 0
+    measurable_covered = 0
+    sub_texel = 0
+    sub_texel_covered = 0
+    measurable_area = 0.0
+    sub_texel_area = 0.0
     for triangle in triangles:
-        hit = False
-        for u, v in _sample_points(triangle):
-            if not (_finite(u) and _finite(v)):
-                continue
-            px = int(min(1.0, max(0.0, u)) * (resolution - 1))
-            py = int(min(1.0, max(0.0, v)) * (resolution - 1))
-            index = py * resolution + px
-            if 0 <= index < len(painted) and painted[index]:
-                hit = True
-                break
-        if not hit:
-            uncovered += 1
-    covered = total - uncovered
-    ratio = covered / total if total else 0.0
+        area = triangle_uv_area(triangle)
+        if area * texels >= MIN_MEASURABLE_TEXELS:
+            measurable += 1
+            measurable_area += area
+            if any(_painted_at(painted, resolution, u, v, 0) for u, v in _sample_points(triangle)):
+                measurable_covered += 1
+        else:
+            sub_texel += 1
+            sub_texel_area += area
+            centroid = _sample_points(triangle)[0]
+            if _painted_at(painted, resolution, centroid[0], centroid[1], max(0, int(neighbourhood))):
+                sub_texel_covered += 1
+    covered = measurable_covered + sub_texel_covered
+    measurable_ratio = measurable_covered / measurable if measurable else 0.0
+    area = measurable_area + sub_texel_area
+    sub_texel_area_ratio = sub_texel_area / area if area > 1e-12 else 0.0
     return {
         "triangles": total,
         "covered_triangles": covered,
-        "uncovered_triangles": uncovered,
-        "coverage_ratio": ratio,
-        "every_triangle_has_bake_coverage": total > 0 and ratio >= MIN_TRIANGLE_COVERAGE_RATIO,
+        "uncovered_triangles": total - covered,
+        "coverage_ratio": covered / total if total else 0.0,
+        "measurable_triangles": measurable,
+        "uncovered_measurable_triangles": measurable - measurable_covered,
+        "measurable_coverage_ratio": measurable_ratio,
+        "sub_texel_triangles": sub_texel,
+        "uncovered_sub_texel_triangles": sub_texel - sub_texel_covered,
+        "sub_texel_ratio": sub_texel / total if total else 0.0,
+        "sub_texel_area_ratio": sub_texel_area_ratio,
+        "atlas_resolution_adequate": sub_texel_area_ratio <= MAX_SUB_TEXEL_AREA_RATIO,
+        "every_triangle_has_bake_coverage": (
+            total > 0 and (measurable == 0 or measurable_ratio >= MIN_TRIANGLE_COVERAGE_RATIO)
+        ),
     }
 
 
@@ -298,6 +357,72 @@ def unpainted_region_report(
     }
 
 
+def failure_detail(
+    failures: Sequence[str],
+    uv_bounds: dict[str, Any],
+    islands: dict[str, Any],
+    coverage: dict[str, Any],
+    colour: dict[str, Any],
+    unpainted: dict[str, Any],
+) -> list[str]:
+    """Explain each failure with the measurement that caused it.
+
+    A rule name on its own sends the reader back to the source to find out what
+    number tripped it. The numbers belong in the error.
+    """
+    def percent(value: Any) -> str:
+        try:
+            return f"{float(value) * 100:.3f}%"
+        except (TypeError, ValueError):
+            return "unknown"
+
+    explanations = {
+        "uv_coordinates_finite": lambda: (
+            f"{uv_bounds.get('non_finite', 0)} of {uv_bounds.get('count', 0)} UV coordinates are not finite numbers"
+        ),
+        "uv_inside_atlas": lambda: (
+            f"{uv_bounds.get('outside', 0)} UV coordinates sit outside 0 to 1, "
+            f"spanning u {uv_bounds.get('min_u', 0):.3f} to {uv_bounds.get('max_u', 0):.3f} and "
+            f"v {uv_bounds.get('min_v', 0):.3f} to {uv_bounds.get('max_v', 0):.3f}"
+        ),
+        "islands_do_not_overlap": lambda: (
+            f"{percent(islands.get('overlap_ratio'))} of the summed UV area is stacked on top of other islands, "
+            f"limit {percent(MAX_ISLAND_OVERLAP_RATIO)}"
+        ),
+        "atlas_usage_sufficient": lambda: (
+            f"the islands occupy only {percent(islands.get('atlas_usage_ratio'))} of the atlas, "
+            f"minimum {percent(MIN_ATLAS_USAGE_RATIO)}"
+        ),
+        "every_triangle_has_bake_coverage": lambda: (
+            f"{coverage.get('uncovered_measurable_triangles', 0)} of {coverage.get('measurable_triangles', 0)} "
+            f"triangles larger than a texel sample no baked colour "
+            f"({percent(coverage.get('measurable_coverage_ratio'))} covered, "
+            f"minimum {percent(MIN_TRIANGLE_COVERAGE_RATIO)})"
+        ),
+        "atlas_resolution_adequate": lambda: (
+            f"{percent(coverage.get('sub_texel_area_ratio'))} of the surface is in triangles smaller than one texel "
+            f"({coverage.get('sub_texel_triangles', 0)} triangles), limit {percent(MAX_SUB_TEXEL_AREA_RATIO)}. "
+            f"Raise the texture size"
+        ),
+        "bake_has_colour_variation": lambda: (
+            f"the bake varies by only {colour.get('standard_deviation', 0.0):.5f} across "
+            f"{colour.get('distinct_colours', 0)} distinct colours, which is close to a flat fill"
+        ),
+        "no_large_unpainted_regions": lambda: (
+            f"{percent(unpainted.get('unpainted_ratio'))} of the island area was never painted, "
+            f"largest single hole {percent(unpainted.get('largest_unpainted_ratio'))}"
+        ),
+        "baked_material_rendered_in_blender": lambda: "the baked material could not be rendered for visual proof",
+    }
+    detail = []
+    for name in failures:
+        try:
+            detail.append(f"{name}: {explanations[name]()}")
+        except Exception:
+            detail.append(name)
+    return detail
+
+
 def evaluate_bake(
     uv_bounds: dict[str, Any],
     islands: dict[str, Any],
@@ -313,6 +438,9 @@ def evaluate_bake(
         "islands_do_not_overlap": bool(islands.get("islands_do_not_overlap")),
         "atlas_usage_sufficient": bool(islands.get("atlas_usage_sufficient")),
         "every_triangle_has_bake_coverage": bool(coverage.get("every_triangle_has_bake_coverage")),
+        # Kept separate from the coverage rule. Folding it in made a failure name
+        # a rule that had not actually failed, which is worse than no message.
+        "atlas_resolution_adequate": bool(coverage.get("atlas_resolution_adequate")),
         "bake_has_colour_variation": bool(colour.get("has_colour_variation")),
         "no_large_unpainted_regions": bool(unpainted.get("no_large_unpainted_regions")),
         "baked_material_rendered_in_blender": bool(material_rendered),
@@ -321,6 +449,7 @@ def evaluate_bake(
     return {
         "passed": not failures,
         "failures": failures,
+        "failure_detail": failure_detail(failures, uv_bounds, islands, coverage, colour, unpainted),
         "checks": checks,
         "uv_bounds": uv_bounds,
         "islands": islands,
