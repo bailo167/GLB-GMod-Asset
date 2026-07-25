@@ -1,5 +1,9 @@
 # Changelog
 
+## 2.2.5, 25 July 2026
+
+* Fixed the vertical texture orientation of every exported SMD. The exporter wrote `1.0 - v` for each vertex, but the SMD text format stores V in the same bottom origin convention Blender uses and StudioMDL performs the DirectX flip itself. The game therefore sampled the atlas vertically mirrored in every release since 2.0 while the Blender proof renders looked correct. This was the final difference between the proof and the game: the 2.2.4 build showed coherent patches of valid colour in mirrored atlas positions, with the flood filled gap colours in between.
+
 ## 2.2.4, 25 July 2026
 
 The 2.2.3 build compiled, installed and passed every check, and the Blender proof renders were correct, but in game the model dissolved into pink and beige noise at distance and the left knee bent backwards while walking.

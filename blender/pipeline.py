@@ -2112,10 +2112,15 @@ def export_smd(path: Path, objects: list[bpy.types.Object], bones: list[dict[str
                     links = " ".join(f"{bone_id} {weight:.6f}" for bone_id, weight in influences)
                     # With explicit links, keep the legacy parent field at root. The
                     # links are the complete weight map and sum to exactly one.
+                    # The SMD text format stores V in the same bottom origin
+                    # convention Blender uses; StudioMDL performs the DirectX
+                    # flip itself. Every release through 2.2.4 wrote 1.0 - v
+                    # here, so the game sampled the atlas vertically mirrored
+                    # while the Blender proof renders looked correct.
                     fh.write(
                         f"0 {co.x:.6f} {co.y:.6f} {co.z:.6f} "
                         f"{normal.x:.6f} {normal.y:.6f} {normal.z:.6f} "
-                        f"{uv.x:.6f} {1.0 - uv.y:.6f} {len(influences)} {links}\n"
+                        f"{uv.x:.6f} {uv.y:.6f} {len(influences)} {links}\n"
                     )
                     vertex_total += 1
                 triangle_total += 1
