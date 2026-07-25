@@ -1,10 +1,11 @@
 {
   "product": "Ember Guided GMod Character Builder",
-  "version": "2.2.2",
+  "version": "2.2.3",
   "status": "uv-atlas-rebuild-and-texture-bake",
+  "note": "2.2.3 rescales the locked guide to the normalised mesh height before rig fitting",
   "built": "2026-07-25",
   "verified": {
-    "python_development_tests_passed": 78,
+    "python_development_tests_passed": 83,
     "bundled_standard_library_tests_passed": 12,
     "python_syntax": true,
     "web_app_module_syntax": true,

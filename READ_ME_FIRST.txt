@@ -1,11 +1,11 @@
-EMBER GUIDED GMOD CHARACTER BUILDER 2.2.2
+EMBER GUIDED GMOD CHARACTER BUILDER 2.2.3
 
 Close Garry's Mod and every old Builder window before updating.
 
-Apply this 2.2.2 update to the existing V2 tool folder. The complete workspace, original GLB
+Apply this 2.2.3 update to the existing V2 tool folder. The complete workspace, original GLB
 and locked guide are preserved. Nothing needs to be marked again.
 
-Restart the Builder and confirm Service v2.2.2. Open the project and select Build + Install.
+Restart the Builder and confirm Service v2.2.3. Open the project and select Build + Install.
 
 WHAT CHANGED
 
@@ -14,7 +14,7 @@ that belonged to the 500,000 triangle import. Those coordinates no longer matche
 reduced triangles, which is why skin appeared on clothing and the shirt appeared across
 trousers.
 
-2.2.2 keeps a full resolution textured copy of the import, builds a brand new UV atlas on
+2.2.3 keeps a full resolution textured copy of the import, builds a brand new UV atlas on
 the reduced mesh, and bakes the colour from the high resolution copy onto it. The build now
 stops if the atlas or the bake fails validation, instead of compiling a scrambled texture.
 

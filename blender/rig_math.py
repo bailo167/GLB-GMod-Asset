@@ -291,3 +291,65 @@ def robust_edge_deformation(
         "shortest_edge": shortest_edge if math.isfinite(shortest_edge) else 0.0,
         "longest_edge": longest_edge,
     }
+
+
+def rescale_guide_landmarks(
+    landmarks: dict,
+    rigid_zones: list,
+    mesh_height: float,
+    tolerance: float = 0.04,
+) -> dict:
+    """Rescale a locked guide to the height the mesh is actually normalised to.
+
+    The landmarks are stored in absolute Source units at whatever height the
+    project used when the guide was locked. If the project's target height is
+    later different, every landmark sits proportionally off the body: on the
+    Jack Hegarty project the guide was locked at 72 units and the mesh was
+    normalised to 64, so the head landmark floated eight units above the head
+    and the skeleton conformance stage rejected the build with an average
+    displacement of 5.1 units. The guide's own vertical extent tells us the
+    scale it was locked at, so the mismatch is corrected here instead of being
+    allowed to reach the conformance gate. Everything is scaled uniformly about
+    the origin, which is the ground point in both spaces.
+    """
+    tops = [
+        float(point[2])
+        for point in landmarks.values()
+        if isinstance(point, (list, tuple)) and len(point) == 3 and math.isfinite(float(point[2]))
+    ]
+    if not tops or float(mesh_height) <= 1e-6:
+        return {"applied": False, "reason": "no_guide_height", "factor": 1.0}
+    guide_height = max(tops)
+    if guide_height <= 1e-6:
+        return {"applied": False, "reason": "no_guide_height", "factor": 1.0}
+    factor = float(mesh_height) / guide_height
+    result = {
+        "guide_height": guide_height,
+        "mesh_height": float(mesh_height),
+        "factor": factor,
+    }
+    if abs(factor - 1.0) <= tolerance:
+        result.update({"applied": False, "reason": "already_matched"})
+        return result
+    if not 0.25 <= factor <= 4.0:
+        # A factor this far out means the guide is not in Source units at all;
+        # scaling it would hide a real corruption rather than fix a height edit.
+        result.update({"applied": False, "reason": "implausible_factor"})
+        return result
+    for key, point in list(landmarks.items()):
+        if isinstance(point, (list, tuple)) and len(point) == 3:
+            landmarks[key] = [float(point[0]) * factor, float(point[1]) * factor, float(point[2]) * factor]
+    zones_scaled = 0
+    for zone in rigid_zones:
+        if not isinstance(zone, dict):
+            continue
+        centre = zone.get("center")
+        if isinstance(centre, (list, tuple)) and len(centre) == 3:
+            zone["center"] = [float(centre[0]) * factor, float(centre[1]) * factor, float(centre[2]) * factor]
+        try:
+            zone["radius"] = float(zone.get("radius", 0.0)) * factor
+        except (TypeError, ValueError):
+            pass
+        zones_scaled += 1
+    result.update({"applied": True, "reason": "height_mismatch", "rigid_zones_scaled": zones_scaled})
+    return result

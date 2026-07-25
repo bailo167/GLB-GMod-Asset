@@ -1,5 +1,11 @@
 # Changelog
 
+## 2.2.3, 25 July 2026
+
+* Rescales the locked guide to the mesh height before anything reads it. The Jack Hegarty guide was locked at 72 inches while the project height was later 64, so every landmark sat 12.5% off the body and the skeleton conformance stage rejected the build with an average displacement of 5.1 units. The guide's own vertical extent identifies the scale it was locked at, and landmarks and rigid zones are scaled uniformly about the ground point.
+* Differences within 4% are left alone, so hair or a hat above the head landmark never triggers a rescale, and a factor outside 0.25 to 4.0 is refused as corruption rather than hidden.
+* The rescale is recorded in the build report as guide_rescale.
+
 ## 2.2.2, 25 July 2026
 
 * Judges atlas adequacy by surface area instead of triangle count. The target character had 3,227 of 32,000 triangles below one texel, 10.08% by count but 0.685% of the surface, and the count based rule stopped a build whose measurable coverage was 99.979%. A decimated mesh always has a long tail of small triangles; what matters is how much of the surface cannot own a texel.
