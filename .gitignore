@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Local project data. The workspace holds imported GLBs, locked guides and every
+# generated build output; none of it belongs in the repository.
+workspace/projects/
+workspace/toolchain.json
