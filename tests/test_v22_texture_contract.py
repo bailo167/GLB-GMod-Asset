@@ -88,9 +88,34 @@ def test_lod_reduction_protects_the_new_atlas_seams():
 
 
 def test_the_sentinel_never_reaches_the_exported_texture():
-    section = PIPELINE[PIPELINE.index("def flatten_unpainted"):PIPELINE.index("def render_material_proof")]
+    section = PIPELINE[PIPELINE.index("def flatten_unpainted"):PIPELINE.index("def persist_bake_image")]
     assert "values[base + 3] = 1.0" in section
-    assert "flattened = flatten_unpainted(image, painted)" in PIPELINE
+    assert "flattened = flatten_unpainted(image, painted, dilation_passes)" in PIPELINE
+
+
+def test_the_atlas_is_dilated_before_the_shipped_coverage_is_measured():
+    # The verdict has to describe the texture that ships, after the bake margin
+    # and the dilation have grown colour outward from every painted island.
+    dilate = PIPELINE.index("flattened = flatten_unpainted(image, painted, dilation_passes)")
+    shipped = PIPELINE.index('shipped = flattened.pop("mask")')
+    measure = PIPELINE.index("coverage = triangle_coverage_report(triangles, shipped, texture_size, neighbourhood=1)")
+    verdict = PIPELINE.index("verdict = evaluate_bake(")
+    assert dilate < shipped < measure < verdict
+
+
+def test_the_retry_loop_reads_the_raw_bake_and_stops_when_escalation_stops_helping():
+    section = PIPELINE[PIPELINE.index("def rebuild_atlas_and_bake"):PIPELINE.index("def safe_material_name")]
+    assert "triangle_coverage_report(triangles, painted, texture_size, neighbourhood=0)" in section
+    assert 'attempts[-1]["uncovered_measurable_triangles"] >= attempts[-2]["uncovered_measurable_triangles"]' in section
+
+
+def test_deprecated_use_nodes_is_not_read_on_blender_5_or_newer():
+    # Blender 5.x warns on Material.use_nodes and 6.0 removes it. Reading
+    # node_tree first keeps 4.x working without touching the deprecated flag.
+    helper = PIPELINE[PIPELINE.index("def material_node_tree"):PIPELINE.index("def assign_baked_material")]
+    assert "material.use_nodes = True" in helper
+    # The single write inside the helper is the only mention anywhere.
+    assert PIPELINE.count("use_nodes") == helper.count("use_nodes")
 
 
 def test_the_baked_atlas_survives_reopening_the_saved_blender_source():

@@ -1072,13 +1072,31 @@ def read_image_pixels(image: bpy.types.Image):
     return values
 
 
+def material_node_tree(material, create: bool = False):
+    """Return a material's node tree without touching deprecated properties.
+
+    Blender 5.x deprecates `Material.use_nodes` and removes it in 6.0, but 4.x
+    still needs it set before a node tree exists. Reading `node_tree` first keeps
+    both versions quiet and working.
+    """
+    tree = getattr(material, "node_tree", None)
+    if tree is None and create:
+        try:
+            material.use_nodes = True
+        except AttributeError:
+            return None
+        tree = getattr(material, "node_tree", None)
+    return tree
+
+
 def assign_baked_material(obj: bpy.types.Object, image: bpy.types.Image, name: str) -> bpy.types.Material:
     """Give the reduced mesh a single material driven by the bake target."""
     mesh = obj.data
     mesh.materials.clear()
     material = bpy.data.materials.new(name)
-    material.use_nodes = True
-    tree = material.node_tree
+    tree = material_node_tree(material, create=True)
+    if tree is None:
+        raise RuntimeError("Blender refused to create a node tree for the baked material.")
     nodes, links = tree.nodes, tree.links
     principled = next((node for node in nodes if node.type == "BSDF_PRINCIPLED"), None)
     output = next((node for node in nodes if node.type == "OUTPUT_MATERIAL"), None)
@@ -1163,9 +1181,10 @@ def source_alpha_required(bake_source: bpy.types.Object) -> bool:
             return True
         if str(getattr(material, "surface_render_method", "")).upper() in {"BLENDED", "DITHERED"}:
             return True
-        if not (material.use_nodes and material.node_tree):
+        tree = material_node_tree(material)
+        if tree is None:
             continue
-        for node in material.node_tree.nodes:
+        for node in tree.nodes:
             if node.type != "BSDF_PRINCIPLED":
                 continue
             socket = node.inputs.get("Alpha")
@@ -1181,9 +1200,11 @@ def _rewire_materials_to_alpha(bake_source: bpy.types.Object) -> list[tuple[Any,
     restore: list[tuple[Any, Any, Any]] = []
     for slot in bake_source.material_slots:
         material = slot.material
-        if material is None or not material.use_nodes or not material.node_tree:
+        if material is None:
             continue
-        tree = material.node_tree
+        tree = material_node_tree(material)
+        if tree is None:
+            continue
         output = next((node for node in tree.nodes if node.type == "OUTPUT_MATERIAL" and node.is_active_output), None)
         if output is None:
             output = next((node for node in tree.nodes if node.type == "OUTPUT_MATERIAL"), None)
@@ -1269,15 +1290,75 @@ def bake_alpha_channel(
         bpy.data.images.remove(probe)
 
 
-def flatten_unpainted(image: bpy.types.Image, painted: list[int]) -> dict[str, Any]:
-    """Replace the sentinel fill with the average baked colour.
+def flatten_unpainted(image: bpy.types.Image, painted: list[int], dilation_passes: int = 6) -> dict[str, Any]:
+    """Push the baked colour outward, then flatten whatever is still empty.
 
-    Unpainted texels only exist in the gaps between atlas islands, but the
-    magenta sentinel must never reach the exported TGA: it would show along
-    island seams and its zero alpha would make the material look translucent.
+    Two problems are solved here.  The magenta sentinel must never reach the
+    exported TGA: it would show along island seams and its zero alpha would make
+    the material look translucent.  Separately, an island smaller than a texel
+    gets nothing from the baker at all, so growing the painted region outward by
+    a few texels gives those slivers the colour of the surface beside them
+    instead of a flat average.  Both are standard for a baked atlas, and the
+    dilation doubles as bleed protection against bilinear filtering in Source.
+
+    Returns the mask of texels that now carry colour, so coverage can be
+    measured against the atlas that actually ships.
     """
+    width = int(image.size[0])
     values = read_image_pixels(image)
     total = len(painted)
+    filled = list(painted)
+
+    frontier: set[int] = set()
+    for index in range(total):
+        if filled[index]:
+            continue
+        y, x = divmod(index, width)
+        for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+            if 0 <= ny < width and 0 <= nx < width and filled[ny * width + nx]:
+                frontier.add(index)
+                break
+
+    dilated = 0
+    for _ in range(max(0, int(dilation_passes))):
+        if not frontier:
+            break
+        updates: list[tuple[int, float, float, float, float]] = []
+        for index in frontier:
+            y, x = divmod(index, width)
+            red = green = blue = alpha = 0.0
+            samples = 0
+            for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+                if not (0 <= ny < width and 0 <= nx < width):
+                    continue
+                neighbour = ny * width + nx
+                if not filled[neighbour]:
+                    continue
+                base = neighbour * 4
+                red += float(values[base])
+                green += float(values[base + 1])
+                blue += float(values[base + 2])
+                alpha += float(values[base + 3])
+                samples += 1
+            if samples:
+                updates.append((index, red / samples, green / samples, blue / samples, alpha / samples))
+        if not updates:
+            break
+        for index, red, green, blue, alpha in updates:
+            base = index * 4
+            values[base], values[base + 1], values[base + 2], values[base + 3] = red, green, blue, alpha
+            filled[index] = 1
+            dilated += 1
+        next_frontier: set[int] = set()
+        for index, *_ in updates:
+            y, x = divmod(index, width)
+            for ny, nx in ((y - 1, x), (y + 1, x), (y, x - 1), (y, x + 1)):
+                if 0 <= ny < width and 0 <= nx < width:
+                    neighbour = ny * width + nx
+                    if not filled[neighbour]:
+                        next_frontier.add(neighbour)
+        frontier = next_frontier
+
     red = green = blue = 0.0
     samples = 0
     for index, is_painted in enumerate(painted):
@@ -1289,19 +1370,26 @@ def flatten_unpainted(image: bpy.types.Image, painted: list[int]) -> dict[str, A
         blue += float(values[base + 2])
         samples += 1
     if samples == 0:
-        return {"filled_texels": 0, "fill_colour": [0.0, 0.0, 0.0]}
+        return {"dilated_texels": dilated, "filled_texels": 0, "fill_colour": [0.0, 0.0, 0.0], "mask": filled}
     fill = (red / samples, green / samples, blue / samples)
-    filled = 0
+    flattened = 0
     for index in range(total):
-        if painted[index]:
+        # Painted and dilated texels keep the alpha the bake gave them; only the
+        # atlas gaps are flattened, and those must be fully opaque.
+        if filled[index]:
             continue
         base = index * 4
         values[base], values[base + 1], values[base + 2] = fill
         values[base + 3] = 1.0
-        filled += 1
+        flattened += 1
     image.pixels.foreach_set(values)
     image.update()
-    return {"filled_texels": filled, "fill_colour": [round(channel, 6) for channel in fill]}
+    return {
+        "dilated_texels": dilated,
+        "filled_texels": flattened,
+        "fill_colour": [round(channel, 6) for channel in fill],
+        "mask": filled,
+    }
 
 
 def persist_bake_image(image: bpy.types.Image, path: Path) -> str | None:
@@ -1432,19 +1520,30 @@ def rebuild_atlas_and_bake(
         bake_selected_to_active(bake_source, obj, "DIFFUSE", extrusion, ray_distance, margin_pixels)
         pixels = read_image_pixels(image)
         painted = painted_mask_from_pixels(pixels, BAKE_SENTINEL)
-        coverage = triangle_coverage_report(triangles, painted, texture_size)
+        # The retry decision reads the raw bake, with no neighbourhood tolerance,
+        # so a genuine projection miss cannot be escalated away.
+        coverage = triangle_coverage_report(triangles, painted, texture_size, neighbourhood=0)
         attempts.append({
             "attempt": index,
             "cage_extrusion": extrusion,
             "max_ray_distance": ray_distance,
             "coverage_ratio": coverage["coverage_ratio"],
             "uncovered_triangles": coverage["uncovered_triangles"],
+            "uncovered_measurable_triangles": coverage["uncovered_measurable_triangles"],
+            "sub_texel_triangles": coverage["sub_texel_triangles"],
         })
         log(
             f"Bake attempt {index}: extrusion {extrusion:.3f}, ray distance {ray_distance:.3f}, "
-            f"triangle coverage {coverage['coverage_ratio'] * 100:.3f}%."
+            f"triangle coverage {coverage['coverage_ratio'] * 100:.3f}%, "
+            f"{coverage['uncovered_measurable_triangles']} uncovered triangles larger than a texel, "
+            f"{coverage['sub_texel_triangles']} smaller than a texel."
         )
         if coverage["every_triangle_has_bake_coverage"]:
+            break
+        if len(attempts) > 1 and attempts[-1]["uncovered_measurable_triangles"] >= attempts[-2]["uncovered_measurable_triangles"]:
+            # A larger projection envelope changed nothing, so the misses are not
+            # a ray distance problem and further escalation only costs time.
+            log("A larger projection envelope did not recover any triangle; stopping the bake retries.")
             break
 
     pixels = read_image_pixels(image)
@@ -1470,7 +1569,17 @@ def rebuild_atlas_and_bake(
             alpha["applied"] = False
             alpha["error"] = str(exc)
             log(f"Alpha transfer failed, the baked atlas stays opaque: {exc}")
-    flattened = flatten_unpainted(image, painted)
+    dilation_passes = max(4, margin_pixels)
+    flattened = flatten_unpainted(image, painted, dilation_passes)
+    shipped = flattened.pop("mask")
+    # The verdict measures the atlas that actually ships, after the bake margin
+    # and the dilation have grown colour outward from every painted island.
+    coverage = triangle_coverage_report(triangles, shipped, texture_size, neighbourhood=1)
+    log(
+        f"Shipped atlas coverage: {coverage['coverage_ratio'] * 100:.3f}% of triangles, "
+        f"{coverage['uncovered_measurable_triangles']} uncovered above one texel, "
+        f"{coverage['uncovered_sub_texel_triangles']} uncovered below one texel."
+    )
     atlas_file = persist_bake_image(image, generated / f"{slug}_baked_atlas.png")
 
     if bake_source.name in bpy.data.objects:
@@ -1491,6 +1600,7 @@ def rebuild_atlas_and_bake(
         "bake_margin_pixels": margin_pixels,
         "bake_attempts": attempts,
         "alpha": alpha,
+        "dilation_passes": dilation_passes,
         "unpainted_fill": flattened,
         "material_proofs": proofs,
         "image": image.name,
@@ -1586,12 +1696,13 @@ def extract_materials(obj: bpy.types.Object, materials_dir: Path, texture_size: 
             base = f"{base}_{i + 1}"
         used_names.add(base)
         mat.name = base
+        material_tree = material_node_tree(mat)
         principled = None
-        if mat.use_nodes and mat.node_tree:
-            principled = next((node for node in mat.node_tree.nodes if node.type == "BSDF_PRINCIPLED"), None)
+        if material_tree is not None:
+            principled = next((node for node in material_tree.nodes if node.type == "BSDF_PRINCIPLED"), None)
         base_image = linked_image_from_socket(principled.inputs.get("Base Color")) if principled else None
-        if base_image is None and mat.use_nodes and mat.node_tree:
-            base_image = next((node.image for node in mat.node_tree.nodes if node.type == "TEX_IMAGE" and node.image), None)
+        if base_image is None and material_tree is not None:
+            base_image = next((node.image for node in material_tree.nodes if node.type == "TEX_IMAGE" and node.image), None)
         tga_path = materials_dir / f"{base}.tga"
         if base_image and base_image.size[0] and base_image.size[1]:
             has_alpha = save_tga(base_image, tga_path, texture_size)

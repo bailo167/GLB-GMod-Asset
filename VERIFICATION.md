@@ -1,4 +1,4 @@
-# Ember Guided Character Builder 2.2.0 verification
+# Ember Guided Character Builder 2.2.1 verification
 
 Date: 25 July 2026
 
@@ -41,6 +41,28 @@ of the texture.
 9. LOD meshes are split along their UV seams before reduction, so collapse cannot merge
    loops across islands at lower detail either.
 
+## 2.2.1: the first real build
+
+The 2.2.0 bake ran correctly on the target character and wrote both proof renders and the
+atlas, then the gate rejected it:
+
+```text
+Bake attempt 1: extrusion 0.432, ray distance 1.440, triangle coverage 99.109%.
+Bake attempt 2: extrusion 1.080, ray distance 3.600, triangle coverage 99.109%.
+Bake attempt 3: extrusion 2.592, ray distance 8.640, triangle coverage 99.109%.
+RuntimeError: ... failed validation: ["every_triangle_has_bake_coverage"]
+```
+
+The figure is identical to three decimal places across a sixfold increase in projection
+envelope. That rules out ray distance entirely. 0.891% of 32,000 triangles is 285
+triangles whose UV footprint is under one texel: the baker rasterizes no texel for them, so
+no ray is ever cast and no amount of extrusion changes anything.
+
+At 1024 with 44.6% atlas usage on a 72 unit character, one texel is roughly 0.1 Source
+units. Those triangles are around two millimetres across and cannot be seen. They are
+measured against the texels beside them now, and the atlas is dilated so those texels carry
+the neighbouring surface colour rather than a flat average.
+
 ## Validation rules
 
 Every rule lives in `blender/bake_validation.py`, which imports no Blender modules and is
@@ -64,7 +86,7 @@ triangles.
 
 ## Automated results
 
-* Development tests: 65 passed
+* Development tests: 73 passed
 * Bundled standard library self test: 12 passed
 * Python syntax checks: passed
 * `web/app.js` ES module syntax check: passed
@@ -75,6 +97,10 @@ triangles.
 * Flat fill rejected, real colour variation accepted: passed
 * Interior unpainted region detected: passed
 * Produced artefact lists green when populated, problem lists red when populated: passed
+* Sub texel triangle recovered by neighbouring texels, and still uncovered at zero tolerance: passed
+* A mesh that is mostly sub texel rejected as too small an atlas: passed
+* A genuine bake miss on a measurable triangle still rejected under neighbourhood tolerance: passed
+* Atlas dilation grows colour outward and leaves no sentinel texel: passed
 * Stub Blender harness executed the complete bake stage, including the retry escalation and
   the transparency pass: passed
 

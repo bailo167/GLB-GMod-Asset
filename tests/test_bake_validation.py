@@ -99,14 +99,86 @@ def test_triangle_coverage_detects_triangles_the_bake_never_reached():
             if x < resolution // 2 and y < resolution // 2:
                 painted[y * resolution + x] = 1
     report = triangle_coverage_report(triangles, painted, resolution)
+    assert report["measurable_triangles"] == 4
     assert report["covered_triangles"] == 2
-    assert report["uncovered_triangles"] == 2
+    assert report["uncovered_measurable_triangles"] == 2
     assert report["every_triangle_has_bake_coverage"] is False
 
     everything = [1] * (resolution * resolution)
     full = triangle_coverage_report(triangles, everything, resolution)
     assert full["coverage_ratio"] == 1.0
     assert full["every_triangle_has_bake_coverage"] is True
+
+
+def test_sub_texel_triangles_are_measured_against_neighbouring_texels():
+    # A triangle smaller than one texel is never rasterized by the baker, so no
+    # ray is cast for it and it can never hit a painted texel directly. This is
+    # what stalled the first real 32k triangle build at 99.109% on every attempt.
+    resolution = 64
+    sliver = 0.4 / resolution  # well under one texel of UV area
+    triangles = [((0.5, 0.5), (0.5 + sliver, 0.5), (0.5 + sliver, 0.5 + sliver))]
+    painted = [0] * (resolution * resolution)
+
+    isolated = triangle_coverage_report(triangles, painted, resolution)
+    assert isolated["sub_texel_triangles"] == 1
+    assert isolated["measurable_triangles"] == 0
+    assert isolated["uncovered_sub_texel_triangles"] == 1
+
+    # After the bake margin and the atlas dilation, the texels beside it carry
+    # colour, which is exactly what the triangle samples when rendered.
+    centre = int(0.5 * (resolution - 1))
+    painted[(centre + 1) * resolution + centre] = 1
+    beside = triangle_coverage_report(triangles, painted, resolution, neighbourhood=1)
+    assert beside["sub_texel_triangles"] == 1
+    assert beside["uncovered_sub_texel_triangles"] == 0
+    assert beside["covered_triangles"] == 1
+
+    # With no tolerance, which is how the retry decision reads the raw bake, it
+    # is still uncovered.
+    assert triangle_coverage_report(triangles, painted, resolution, neighbourhood=0)["covered_triangles"] == 0
+
+
+def test_a_few_sub_texel_slivers_do_not_fail_an_otherwise_covered_mesh():
+    # The real build reported 285 of 32,000 triangles uncovered, unchanged across
+    # three escalating projection envelopes, because they were sub texel.
+    resolution = 64
+    triangles = []
+    for index in range(10):
+        triangles.extend(square(0.02 + index * 0.09, 0.05, 0.08))
+    sliver = 0.4 / resolution
+    triangles.append(((0.5, 0.7), (0.5 + sliver, 0.7), (0.5 + sliver, 0.7 + sliver)))
+    painted = [1] * (resolution * resolution)
+    report = triangle_coverage_report(triangles, painted, resolution)
+    assert report["sub_texel_triangles"] == 1
+    assert report["sub_texel_ratio"] < 0.10
+    assert report["measurable_coverage_ratio"] == 1.0
+    assert report["every_triangle_has_bake_coverage"] is True
+
+
+def test_a_mesh_that_is_mostly_sub_texel_fails_as_too_small_an_atlas():
+    resolution = 32
+    sliver = 0.2 / resolution
+    triangles = [
+        ((x / 40.0, 0.5), (x / 40.0 + sliver, 0.5), (x / 40.0 + sliver, 0.5 + sliver))
+        for x in range(30)
+    ] + square(0.05, 0.05, 0.3)
+    painted = [1] * (resolution * resolution)
+    report = triangle_coverage_report(triangles, painted, resolution)
+    assert report["sub_texel_ratio"] > 0.10
+    assert report["atlas_resolution_adequate"] is False
+    assert report["every_triangle_has_bake_coverage"] is False
+
+
+def test_a_real_bake_miss_still_fails_even_with_neighbourhood_tolerance():
+    resolution = 32
+    triangles = square(0.55, 0.55, 0.4)
+    painted = [0] * (resolution * resolution)
+    for index in range(resolution * 4):
+        painted[index] = 1
+    report = triangle_coverage_report(triangles, painted, resolution, neighbourhood=2)
+    assert report["measurable_triangles"] == 2
+    assert report["uncovered_measurable_triangles"] == 2
+    assert report["every_triangle_has_bake_coverage"] is False
 
 
 def test_colour_report_rejects_a_flat_fill_and_accepts_real_variation():

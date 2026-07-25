@@ -1,5 +1,16 @@
 # Changelog
 
+## 2.2.1, 25 July 2026
+
+* Fixes the texture bake gate stalling at 99.109% coverage on the first real 32,000 triangle build. The missed triangles were smaller than one texel of UV area, so the baker rasterizes nothing for them and never casts a ray. Escalating the projection envelope could not change the result, which is why all three attempts reported the identical figure.
+* Coverage is now measured per population. A triangle with at least one texel of UV footprint must hit painted texels directly, and failing that still stops the build. A triangle below one texel is measured against the texels beside it, which is what it samples when rendered.
+* Reports `sub_texel_triangles` and fails a build where more than one triangle in ten is sub texel, because that means the chosen texture size is too small for the mesh.
+* Dilates the baked atlas outward from every painted island before export, instead of flattening the gaps to one average colour. This fills isolated slivers with the colour of the surface beside them and protects against bilinear bleed in Source.
+* The coverage verdict now measures the atlas that actually ships, after the bake margin and the dilation. The retry decision still reads the raw bake with no tolerance.
+* Stops the bake retries as soon as a larger projection envelope recovers no further triangles.
+* Preserves the alpha the bake produced. The previous flatten pass forced every texel opaque, which discarded the transparency transfer.
+* Stops reading the deprecated `Material.use_nodes`, which warns on Blender 5.x and is removed in 6.0.
+
 ## 2.2.0, 25 July 2026
 
 * Keeps a full resolution textured copy of the imported GLB before any reduction.
