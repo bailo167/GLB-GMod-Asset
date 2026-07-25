@@ -286,6 +286,15 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self.send_json(record.to_dict(), 201)
                 return
+            m = re.fullmatch(r"/api/projects/([a-f0-9]{12})/options", path)
+            if m:
+                raw = json.loads(body.decode("utf-8")) if body else {}
+                if not isinstance(raw, dict):
+                    self.send_error_json(400, "Options payload must be a JSON object.")
+                    return
+                record = PROJECTS.update_options(m.group(1), raw)
+                self.send_json(record.to_dict())
+                return
             m = re.fullmatch(r"/api/projects/([a-f0-9]{12})/build", path)
             if m:
                 project_id = m.group(1)
@@ -349,15 +358,6 @@ class Handler(BaseHTTPRequestHandler):
         try:
             path = urllib.parse.urlparse(self.path).path
             body = self.read_body()
-            m = re.fullmatch(r"/api/projects/([a-f0-9]{12})/options", path)
-            if m:
-                raw = json.loads(body.decode("utf-8")) if body else {}
-                if not isinstance(raw, dict):
-                    self.send_error_json(400, "Options payload must be a JSON object.")
-                    return
-                record = PROJECTS.update_options(m.group(1), raw)
-                self.send_json(record.to_dict())
-                return
             m = re.fullmatch(r"/api/projects/([a-f0-9]{12})/guide", path)
             if not m:
                 self.send_error_json(404, "Unknown API route.")
